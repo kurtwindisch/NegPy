@@ -641,6 +641,26 @@ def test_grouping_leaves_an_assembled_asset_alone(tmp_path, monkeypatch):
     assert out[0] is assembled
 
 
+def test_grouping_passes_over_a_merged_triplet_tiff(tmp_path, monkeypatch):
+    """A TIFF merged from a triplet is one frame: never probed, grouped or counted loose."""
+    from negpy.desktop.workers.render import AssetDiscoveryWorker
+    from negpy.services.export.triplet_merge import write_merged_triplet
+
+    names = ["f2_r.raw", "f2_g.raw", "f2_b.raw"]
+    _fake_probes(monkeypatch, {n: {"r": RED, "g": GREEN, "b": BLUE}[n[-5]] for n in names})
+    merged_path = str(tmp_path / "f1_r_RGB.tif")
+    write_merged_triplet(np.full((4, 6, 3), 0.5, dtype=np.float32), str(tmp_path / "f1_r.raw"), merged_path)
+    merged = {"name": "f1_r_RGB.tif", "path": merged_path, "hash": "m"}
+    loose = [{"name": n, "path": str(tmp_path / n), "hash": n} for n in names]
+
+    worker = AssetDiscoveryWorker()
+    reports: list = []
+    worker.rgb_grouped.connect(reports.append)
+    out = worker._group_rgb_triplets([merged, *loose])
+    assert [a["name"] for a in out] == ["f1_r_RGB.tif", "f2_r (RGB)"]
+    assert reports == []
+
+
 def test_config_roundtrip_preserves_rgbscan():
     cfg = WorkspaceConfig()
     cfg = type(cfg)(**{**cfg.__dict__, "rgbscan": RgbScanConfig(enabled=True, green_path="/g", blue_path="/b")})
