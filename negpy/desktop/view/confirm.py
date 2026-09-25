@@ -1,3 +1,5 @@
+from typing import Optional
+
 from PyQt6.QtWidgets import QCheckBox, QMessageBox
 from negpy.kernel.system.text import count_of
 from negpy.services.assets import rolls
@@ -172,6 +174,30 @@ def confirm_assembly_mode(parent, mode: str, count: int) -> bool:
     box.setDefaultButton(turn_on)
     box.exec()
     return box.clickedButton() is turn_on
+
+
+def confirm_triplet_merge(parent, count: int, skipped: list) -> Optional[bool]:
+    """Ask before Merge Roll to TIFF. None on Cancel, else whether the exposures go to the Trash."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle("Merge Roll to TIFF")
+    box.setText(f"Merge {count_of(count, 'triplet')} into TIFFs?")
+    lines = ["Each TIFF is written next to its red exposure and takes over the frame's edit. The export demosaic is fixed in the file."]
+    if skipped:
+        shown = skipped[:8]
+        more = f"\n…and {len(skipped) - len(shown)} more" if len(skipped) > len(shown) else ""
+        lines.append("Skipped:\n" + "\n".join(shown) + more)
+    box.setInformativeText("\n\n".join(lines))
+    trash = QCheckBox("Move each merged frame's exposures to the Trash")
+    trash.setChecked(True)
+    box.setCheckBox(trash)
+    merge = box.addButton("Merge", QMessageBox.ButtonRole.AcceptRole)
+    box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(merge)
+    box.exec()
+    if box.clickedButton() is not merge:
+        return None
+    return trash.isChecked()
 
 
 def _confirm_with_verb(parent, title: str, text: str, informative: str, verb: str) -> bool:

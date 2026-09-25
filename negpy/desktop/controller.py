@@ -8,7 +8,7 @@ from typing import Any, Callable, Collection, Dict, List, Optional, Set, Tuple, 
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import Q_ARG, QMetaObject, QObject, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Q_ARG, QFile, QMetaObject, QObject, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QPixmap, QTransform
 from PyQt6.QtWidgets import QCheckBox, QMessageBox
 
@@ -56,6 +56,7 @@ from negpy.desktop.workers.scan_worker import BatchRequest, MeterRequest, Presca
 from negpy.desktop.workers.library import LibrarySearchTask, LibrarySearchWorker
 from negpy.desktop.workers.hdr import HdrTask, HdrWorker
 from negpy.desktop.workers.stitch import StitchTask, StitchWorker
+from negpy.desktop.workers.triplet_merge import TripletMergeTask, TripletMergeWorker
 from negpy.features.hdr.models import ANCHOR_EV_UNSET, hdr_frame_paths, hdr_hash, hdr_name
 from negpy.features.process.capture_color import apply_camera_matrix, camera_to_working_matrix, lightbox_level, wb_only_cam_xyz
 from negpy.features.process.logic import (
@@ -103,7 +104,9 @@ from negpy.services.assets.half_frame import (
     split_scans,
 )
 from negpy.services.export.templating import path_safe, render_export_filename
-from negpy.services.assets.sidecar import load_or_promote, write_sidecar
+from negpy.services.assets.sidecar import load_or_promote, sidecar_path_for, write_sidecar
+from negpy.services.assets.triplet_merge import carry_edit, carry_sidecar
+from negpy.services.export.triplet_merge import can_merge, merged_path_for
 from negpy.features.exposure.analysis import (
     RING_GRID,
     STRIP_GRID,
@@ -172,6 +175,14 @@ _BUSY_TOAST_MS = 30000
 # Batch owners that share norm_thread (and its CPU) with the background thumbnail
 # refresh — the only ones a running refresh actually needs to get out of the way of.
 _NORM_THREAD_BATCH_OWNERS = frozenset({"autocrop", "normalization"})
+
+
+def _move_to_trash(path: str) -> bool:
+    """Move *path* to the OS Trash. False, with the file left in place, when the volume has none."""
+    ok, _trashed = QFile.moveToTrash(path)
+    return bool(ok)
+
+
 # A keep_preview reload (same file, e.g. a mode switch) skips the spinner so a fast
 # lens-correction toggle doesn't flicker — but then shows nothing while a slow decode
 # runs. This backstop arms it late, only if that decode is still in flight by then.
@@ -377,6 +388,7 @@ class AppController(QObject):
     first_scene_created = pyqtSignal()  # the loaded roll's first scene: the Film Strip sorts by scene
     stitch_requested = pyqtSignal(object)
     hdr_requested = pyqtSignal(object)
+    triplet_merge_requested = pyqtSignal(list)
     thumbnail_requested = pyqtSignal(list)
     thumbnail_cancel_requested = pyqtSignal()
     thumbnail_update_requested = pyqtSignal(ThumbnailUpdateTask)
@@ -468,6 +480,7 @@ class AppController(QObject):
         self._first_render_t0: Optional[float] = None
         self._export_start_time = 0.0
         self._export_failures = 0
+        self._triplet_merge_trash = True
         self._discovery_running = False
         self._auto_open_after_discovery = False
         self._replace_after_discovery = False
@@ -546,6 +559,8 @@ class AppController(QObject):
         self.stitch_worker.moveToThread(self.export_thread)
         self.hdr_worker = HdrWorker()
         self.hdr_worker.moveToThread(self.export_thread)
+        self.triplet_merge_worker = TripletMergeWorker()
+        self.triplet_merge_worker.moveToThread(self.export_thread)
         self.export_thread.start()
 
         self.thumb_thread = QThread()
@@ -781,6 +796,10 @@ class AppController(QObject):
         self.stitch_worker.registered.connect(self._on_stitch_registered)
         self.stitch_worker.cancelled.connect(self._on_stitch_cancelled)
         self.stitch_worker.error.connect(self._on_stitch_error)
+
+        self.triplet_merge_requested.connect(self.triplet_merge_worker.run)
+        self.triplet_merge_worker.progress.connect(self._on_batch_progress)
+        self.triplet_merge_worker.finished.connect(self._on_triplet_merge_finished)
 
         self.hdr_requested.connect(self.hdr_worker.run)
         self.hdr_worker.progress.connect(self._on_batch_progress)
@@ -1293,6 +1312,8 @@ class AppController(QObject):
             self.stitch_worker.cancel()
         elif self._active_batch == "hdr":
             self.hdr_worker.cancel()
+        elif self._active_batch == "triplet_merge":
+            self.triplet_merge_worker.cancel()
         elif self._active_batch == "library_index":
             self._library_index_cancelled = True
             self.embedding_worker.cancel()
@@ -4914,6 +4935,101 @@ class AppController(QObject):
     def _on_stitch_error(self, message: str) -> None:
         self._end_batch("stitch")
         self.set_status(message, 6000, kind="error")
+
+    def triplet_merge_plan(self) -> tuple[list[int], list[str]]:
+        """Film Strip indices of the triplets Merge Roll to TIFF can merge, and a line for
+        each triplet it cannot."""
+        mergeable: list[int] = []
+        skipped: list[str] = []
+        for i, f in enumerate(self.state.uploaded_files):
+            if not (f.get("green_path") and f.get("blue_path")):
+                continue
+            if f.get("stitch_paths") or f.get("hdr_paths") or f.get("half"):
+                skipped.append(f"{f['name']}: part of a stitch")
+            elif not can_merge(f["path"], f["green_path"], f["blue_path"]):
+                skipped.append(f"{f['name']}: an exposure is missing or not a camera RAW")
+            else:
+                mergeable.append(i)
+        return mergeable, skipped
+
+    def request_triplet_merge(self, indices: list[int], trash: bool) -> None:
+        """Merge each triplet at *indices* into a TIFF next to its red exposure. With
+        *trash*, its three exposures go to the Trash once its edit has moved over."""
+        if self._batch_busy("Merge Roll to TIFF"):
+            return
+        self.session.save_active_edit()
+        taken: set[str] = set()
+        tasks = []
+        for i in indices:
+            f = self.state.uploaded_files[i]
+            out_path = merged_path_for(f["path"], frozenset(taken))
+            taken.add(out_path)
+            tasks.append(
+                TripletMergeTask(
+                    asset=dict(f),
+                    params=self._batch_params_for(f),
+                    out_path=out_path,
+                    compression=self.state.config.export.tiff_compression,
+                )
+            )
+        if not tasks or self._begin_batch("triplet_merge", "Merging triplets", abortable=True) is None:
+            return
+        self._triplet_merge_trash = trash
+        self.triplet_merge_requested.emit(tasks)
+
+    def _on_triplet_merge_finished(self, results: list, aborted: bool) -> None:
+        """Move each merged frame's edit to its TIFF, swap it into the Film Strip, then
+        trash its exposures. A frame whose edit did not move keeps its exposures."""
+        self._end_batch("triplet_merge")
+        self.session.save_active_edit()
+        repo = self.session.repo
+        index_by_path = {f["path"]: i for i, f in enumerate(self.state.uploaded_files) if f.get("green_path")}
+        replacements: dict[int, dict] = {}
+        failed = 0
+        kept = 0
+        for r in results:
+            if r.error:
+                failed += 1
+                logger.warning("Merge Roll to TIFF failed for %s: %s", r.asset["name"], r.error)
+                continue
+            red, green, blue = r.asset["path"], r.asset["green_path"], r.asset["blue_path"]
+            red_hash = rolls.unforked_hash(r.asset["hash"])
+            red_sidecar = sidecar_path_for(red)
+            try:
+                config = repo.load_file_settings(red_hash) or self.session.config_for_asset({**r.asset, "hash": red_hash})
+                carry_edit(repo, red_hash, red, r.new_hash, r.out_path, [green, blue], config)
+                carry_sidecar(red, r.out_path, config)
+            except Exception as e:
+                failed += 1
+                logger.warning("Merge Roll to TIFF could not move the edit of %s: %s", r.asset["name"], e)
+                continue
+            new_asset = {
+                "name": os.path.basename(r.out_path),
+                "path": r.out_path,
+                "hash": r.new_hash,
+                "legacy_hash": "",
+                "mtime": os.path.getmtime(r.out_path),
+            }
+            self._apply_roll_forks([new_asset])
+            if red in index_by_path:
+                replacements[index_by_path[red]] = new_asset
+            if self._triplet_merge_trash:
+                for path in (red, green, blue, red_sidecar):
+                    if os.path.exists(path) and not _move_to_trash(path):
+                        kept += 1
+                        logger.warning("Merge Roll to TIFF could not move %s to the Trash", path)
+        self.session.replace_assets(replacements)
+        self.generate_missing_thumbnails()
+
+        merged = len(results) - failed
+        parts = [f"Merged {count_of(merged, 'triplet')}"]
+        if aborted:
+            parts.append("aborted")
+        if failed:
+            parts.append(f"{failed} failed")
+        if kept:
+            parts.append(f"{count_of(kept, 'file')} could not go to the Trash")
+        self.set_status(", ".join(parts), 8000, kind="warning" if failed or kept else "info")
 
     def request_unstitch(self) -> None:
         """Dissolve the active stitched composite back into its part frames.

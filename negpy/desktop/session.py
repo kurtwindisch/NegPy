@@ -2001,6 +2001,31 @@ class DesktopSessionManager(QObject):
         self._persist_session()
         self.select_file(pos)
 
+    def save_active_edit(self) -> None:
+        """Write the open frame's unsaved edit, so a batch reading the DB sees it."""
+        if self.state.current_file_hash and self._config_dirty:
+            self.repo.save_file_settings(self.state.current_file_hash, self.state.config, file_path=self.state.current_file_path or "")
+            self.settings_saved.emit()
+            self._config_dirty = False
+
+    def replace_assets(self, replacements: Dict[int, dict]) -> None:
+        """Swap Film Strip entries in place ({index: new asset}) and reopen the active frame
+        when it is one of them."""
+        valid = {i: a for i, a in replacements.items() if 0 <= i < len(self.state.uploaded_files)}
+        if not valid:
+            return
+        marks = self.repo.load_file_marks()
+        for i, asset in valid.items():
+            self._drop_thumbnail(self.state.uploaded_files[i])
+            m = marks.get(asset["hash"])
+            self.state.uploaded_files[i] = {**asset, "keeper": m == "keeper", "excluded": m == "excluded"}
+        self.asset_model.refresh()
+        self.files_changed.emit()
+        self._persist_session()
+        if self.state.selected_file_idx in valid:
+            self._config_dirty = False
+            self.select_file(self.state.selected_file_idx, selection_override=list(self.state.selected_indices))
+
     def set_triplet(self, index: int, red_path: str, green_path: str, blue_path: str, align: bool = True) -> None:
         """Reassign the R/G/B exposures of an RGB-scan asset, then reload it."""
         import os

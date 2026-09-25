@@ -16,6 +16,7 @@ from negpy.desktop.view.shortcut_registry import (
     slider_step_for,
 )
 from negpy.desktop.view.slider_shortcut_groups import SLIDER_GROUP_BY_ACTION, SLIDER_GROUPS, SliderShortcutGroup, sign_for_action
+from negpy.desktop.view.sidebar.trichrome import merge_roll_triplets
 from negpy.desktop.view.slider_targets import slider_widget_map
 from negpy.desktop.view.widgets.collapsible import hidden_by_gating
 
@@ -258,6 +259,7 @@ class ShortcutManager:
             "zoom_200": lambda: self.window.canvas.zoom_to_percent(200.0),
             "export": controller.request_export,
             "export_linear_output": controller.request_linear_output_export,
+            "merge_triplets": lambda: merge_roll_triplets(self.window, controller),
             "copy": controller.session.copy_settings,
             "copy_with_bounds": controller.session.copy_settings_with_bounds,
             "paste": lambda: open_paste_dialog(self.window, controller),

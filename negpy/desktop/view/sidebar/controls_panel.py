@@ -493,6 +493,7 @@ class ControlsPanel(QWidget):
             (self.tone_sidebar.auto_grade_btn, "toggle_auto_grade"),
             (self.presets_sidebar.apply_btn, "preset_apply"),
             (self.presets_sidebar.save_btn, "preset_save"),
+            (self.trichrome_sidebar.merge_btn, "merge_triplets"),
         ):
             btn.setToolTip(wrap_tooltip(tooltip_with_shortcut(btn.plain_tooltip, action_id)))
         exp = self.tone_sidebar
