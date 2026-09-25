@@ -48,8 +48,10 @@ class TrichromeSidebar(BaseSidebar):
         self.merge_btn = self._labeled_action(
             "fa5s.object-group",
             " Merge Roll to TIFF…",
-            "Write each triplet as one linear RGB TIFF next to its red exposure, carry the frame's "
-            "edit over, and optionally move the three exposures to the Trash",
+            wrap_tooltip(
+                "Write each triplet as one linear RGB TIFF next to its red exposure, carry the frame's "
+                "edit over, and optionally move the three exposures to the Trash"
+            ),
         )
         self.layout.addWidget(self.merge_btn)
 
