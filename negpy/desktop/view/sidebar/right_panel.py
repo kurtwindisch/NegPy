@@ -4,6 +4,8 @@ import numpy as np
 import qtawesome as qta
 from PyQt6.QtCore import Qt, QSize, QTimer
 from PyQt6.QtWidgets import (
+    QButtonGroup,
+    QHBoxLayout,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -19,7 +21,7 @@ from negpy.desktop.view.sidebar.export import ExportSidebar
 from negpy.desktop.view.sidebar.favourites import FavouritesSidebar
 from negpy.desktop.view.sidebar.history import HistoryPanel
 from negpy.desktop.view.sidebar.metadata import MetadataSidebar
-from negpy.desktop.view.styles.templates import EditedDot
+from negpy.desktop.view.styles.templates import EditedDot, labeled_toggle
 from negpy.desktop.view.styles.theme import THEME
 from negpy.desktop.view.widgets.charts import PhotometricCurveWidget, StepWedgeWidget, ZoneStripWidget
 from negpy.desktop.view.widgets.collapsible import make_section
@@ -47,6 +49,9 @@ _ROLL_SECTION_ATTRS = frozenset(
         "optics_section",
     }
 )
+
+# Analysis chart isolate row: which overlay(s) PhotometricCurveWidget.set_overlay_mode draws.
+_OVERLAY_MODES = ("all", "curve", "print_hist", "density_hist")
 
 
 class RightPanel(QWidget):
@@ -169,6 +174,30 @@ class RightPanel(QWidget):
         repo = self.controller.session.repo
         self.curve_widget.set_log_scale(bool(repo.get_global_setting("histogram_log_scale")))
         self.curve_widget.scale_changed.connect(lambda enabled: repo.save_global_setting("histogram_log_scale", bool(enabled)))
+
+        # Isolate row: All / Curve / Print Hist / Density Hist, mutually exclusive like
+        # ToneSidebar's Global/R/G/B channel selector.
+        self.overlay_all_btn = labeled_toggle("fa5s.layer-group", " All", True, "All -- curve, print histogram and density histogram together")
+        self.overlay_curve_btn = labeled_toggle("fa5s.chart-line", " Curve", False, "Isolate the characteristic curve")
+        self.overlay_print_btn = labeled_toggle("fa5s.chart-bar", " Print Hist", False, "Isolate the print/output histogram")
+        self.overlay_density_btn = labeled_toggle("fa5s.chart-area", " Density Hist", False, "Isolate the negative density histogram")
+        self._overlay_buttons = (self.overlay_all_btn, self.overlay_curve_btn, self.overlay_print_btn, self.overlay_density_btn)
+        self.overlay_btn_group = QButtonGroup(self)
+        self.overlay_btn_group.setExclusive(True)
+        for i, btn in enumerate(self._overlay_buttons):
+            self.overlay_btn_group.addButton(btn, i)
+
+        overlay_row = QHBoxLayout()
+        overlay_row.setSpacing(THEME.space_sm)
+        for btn in self._overlay_buttons:
+            overlay_row.addWidget(btn)
+        analysis_layout.addLayout(overlay_row)
+
+        saved_mode = repo.get_global_setting("analysis_overlay_mode", "all")
+        mode_index = _OVERLAY_MODES.index(saved_mode) if saved_mode in _OVERLAY_MODES else 0
+        self._overlay_buttons[mode_index].setChecked(True)
+        self.curve_widget.set_overlay_mode(_OVERLAY_MODES[mode_index])
+        self.overlay_btn_group.idClicked.connect(self._on_overlay_mode_changed)
 
         analysis_layout.addWidget(self.curve_widget, 1)
         analysis_layout.addWidget(self.step_wedge, 0)
@@ -504,6 +533,11 @@ class RightPanel(QWidget):
         self.probe_row.set_reading(reading)
         self.curve_widget.set_tracking_point(None if reading is None else reading.val_luma)
 
+    def _on_overlay_mode_changed(self, index: int) -> None:
+        mode = _OVERLAY_MODES[index]
+        self.curve_widget.set_overlay_mode(mode)
+        self.controller.session.repo.save_global_setting("analysis_overlay_mode", mode)
+
     def _update_histograms(self, metrics: Dict[str, Any]) -> None:
         """Feed the merged chart's two distributions, the zone strip and the clip stats."""
         from negpy.features.exposure.analysis import (
@@ -518,14 +552,19 @@ class RightPanel(QWidget):
         # Peek Negative applied no curve, so the print histogram, curve and zone strip
         # would describe a print that was never made. Density is unaffected: it reads
         # the scan itself, before the curve, and splits into channels since there is no
-        # print histogram here to carry color information.
+        # print histogram here to carry color information. The isolate row has nothing
+        # else to offer then, so it's disabled rather than left picking a dead option.
         if self.controller.state.negative_peek:
             self.curve_widget.set_output_histogram(None)
             self.curve_widget.set_show_print(False)
             self.curve_widget.set_channel_density(True)
             self._clip_fracs = (None, None)
             self.zone_strip.setVisible(False)
+            for btn in self._overlay_buttons:
+                btn.setEnabled(False)
             return
+        for btn in self._overlay_buttons:
+            btn.setEnabled(True)
         self.curve_widget.set_show_print(True)
         self.curve_widget.set_channel_density(False)
 

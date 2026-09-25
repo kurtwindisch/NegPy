@@ -301,6 +301,10 @@ Behind the curve is the **output histogram** (print tones in R, G, B and luminan
 
 In Peek Negative the curve, output histogram and zone strip go, and the density histogram splits into R, G, B and luminance, each scaled to its own peak. A spike at an edge is that channel clipping; a trace apart from the others is a strong cast.
 
+#### Isolate a layer
+
+**All / Curve / Print Hist / Density Hist**, above the chart. All shows every layer together, the default; the other three hide the rest to read one signal on its own. Disabled during Peek Negative, when only the density histogram has anything to show. The choice is kept between sessions.
+
 #### LIN / LOG toggle
 
 Bottom-right of the chart. It sets the histogram's height axis (pixel count). **LIN** is literal; **LOG** compresses tall peaks so thin shadow and highlight tails show. Use LOG to find clipping, LIN to see the bulk of the frame. The choice is kept between sessions.

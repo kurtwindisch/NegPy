@@ -14,6 +14,7 @@ def _panel_stub(negative_peek: bool) -> MagicMock:
     panel.controller.state.flat_peek = False
     panel.curve_widget = MagicMock()
     panel.zone_strip = MagicMock()
+    panel._overlay_buttons = [MagicMock() for _ in range(4)]
     return panel
 
 
@@ -28,6 +29,8 @@ def test_a_negative_peek_shows_only_the_density_histogram() -> None:
     panel.curve_widget.set_show_print.assert_called_once_with(False)
     panel.zone_strip.setVisible.assert_called_once_with(False)
     assert panel._clip_fracs == (None, None)
+    for btn in panel._overlay_buttons:
+        btn.setEnabled.assert_called_once_with(False)
 
 
 def test_a_normal_render_still_shows_the_print(monkeypatch) -> None:
@@ -41,6 +44,8 @@ def test_a_normal_render_still_shows_the_print(monkeypatch) -> None:
     panel.curve_widget.set_show_print.assert_called_once_with(True)
     panel.curve_widget.set_output_histogram.assert_called_once()
     assert panel.curve_widget.set_output_histogram.call_args[0][0] is not None
+    for btn in panel._overlay_buttons:
+        btn.setEnabled.assert_called_once_with(True)
 
 
 def test_show_print_false_leaves_the_density_histogram_paintable() -> None:
@@ -62,3 +67,25 @@ def test_show_print_false_leaves_the_density_histogram_paintable() -> None:
     assert widget._show_print is False
     # paintEvent must not raise with print traces suppressed but density data present.
     widget.grab()
+
+
+def test_each_overlay_mode_paints_without_error() -> None:
+    """The isolate row's modes only gate which existing layer draws; none should ever
+    raise, whether or not the layers they hide have data."""
+    import numpy as np
+
+    from negpy.features.exposure.analysis import DENSITY_HIST_BINS
+
+    widget = PhotometricCurveWidget()
+    widget.resize(200, 120)
+    widget._curve_pts = [(0.0, 0.0), (1.0, 1.0)]
+    density_bins = np.zeros((4, DENSITY_HIST_BINS))
+    density_bins[:, 10] = 1.0
+    widget.set_density_histogram(density_bins)
+    output_bins = np.zeros((4, 256))
+    output_bins[:, 128] = 1.0
+    widget.set_output_histogram(output_bins)
+
+    for mode in ("all", "curve", "print_hist", "density_hist"):
+        widget.set_overlay_mode(mode)
+        widget.grab()
