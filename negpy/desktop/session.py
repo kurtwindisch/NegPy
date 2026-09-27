@@ -907,6 +907,23 @@ class DesktopSessionManager(QObject):
         self.state.stale_thumbnails.discard(key)
         self.state.embeddings.pop(asset.get("hash"), None)
 
+    def _carry_thumbnail(self, old: Dict[str, Any], new: Dict[str, Any]) -> None:
+        """Give a replacement frame the thumbnail of the frame it was made from.
+
+        A merged file renders the same picture as the assembly it replaces, so the icon is
+        already right. The background pass that would otherwise fill it reads no geometry
+        (`get_thumbnail_worker`), so a rotated frame would come back unrotated beside
+        neighbours that kept a real render.
+        """
+        old_key, new_key = asset_thumbnail_key(old), asset_thumbnail_key(new)
+        icon = self.state.thumbnails.get(old_key)
+        if icon is None or new_key in self.state.thumbnails:
+            return
+        self.state.thumbnails[new_key] = icon
+        for flags in (self.state.rendered_thumbnails, self.state.stale_thumbnails):
+            if old_key in flags:
+                flags.add(new_key)
+
     def search_facts(self) -> Dict[str, Dict[str, Any]]:
         """Searchable facts per asset hash, rebuilt on first use after any change.
 
@@ -2004,6 +2021,7 @@ class DesktopSessionManager(QObject):
             return
         marks = self.repo.load_file_marks()
         for i, asset in valid.items():
+            self._carry_thumbnail(self.state.uploaded_files[i], asset)
             self._drop_thumbnail(self.state.uploaded_files[i])
             m = marks.get(unforked_hash(asset["hash"]))
             self.state.uploaded_files[i] = {**asset, "keeper": m == "keeper", "excluded": m == "excluded"}
@@ -2024,6 +2042,7 @@ class DesktopSessionManager(QObject):
         marks = self.repo.load_file_marks()
         for i in sorted(valid, reverse=True):
             asset = valid[i]
+            self._carry_thumbnail(self.state.uploaded_files[i], asset)
             m = marks.get(unforked_hash(asset["hash"]))
             self.state.uploaded_files.insert(i + 1, {**asset, "keeper": m == "keeper", "excluded": m == "excluded"})
 

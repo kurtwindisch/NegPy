@@ -691,3 +691,59 @@ def test_request_merges_by_path_so_a_stale_index_cannot_merge_the_wrong_frame(tm
     AppController.request_frame_merge(ctrl, [red], True)
 
     ctrl.frame_merge_requested.emit.assert_not_called()
+
+
+def _thumb_session(uploaded):
+    from unittest.mock import MagicMock
+
+    from negpy.desktop.session import DesktopSessionManager
+
+    session = MagicMock()
+    session.state.uploaded_files = uploaded
+    session.state.thumbnails = {}
+    session.state.rendered_thumbnails = set()
+    session.state.stale_thumbnails = set()
+    session.state.selected_file_idx = 0
+    session.state.selected_indices = [0]
+    session.repo.load_file_marks.return_value = {}
+    # Bound explicitly: a MagicMock would otherwise answer these with a mock of its own.
+    session._carry_thumbnail = lambda old, new: DesktopSessionManager._carry_thumbnail(session, old, new)
+    session._drop_thumbnail = lambda asset: DesktopSessionManager._drop_thumbnail(session, asset)
+    session.state.embeddings = {}
+    return session, DesktopSessionManager
+
+
+def test_a_merged_frame_keeps_the_rendered_thumbnail_of_the_frame_it_replaces():
+    """The background pass reads no geometry, so a regenerated icon loses the rotation."""
+    from negpy.services.assets.thumbnails import asset_thumbnail_key
+
+    triplet = {"path": "/r.ARW", "hash": "red", "green_path": "/g.ARW", "blue_path": "/b.ARW"}
+    merged = {"path": "/r_RGB.tif", "hash": "new"}
+    session, cls = _thumb_session([triplet])
+    old_key = asset_thumbnail_key(triplet)
+    session.state.thumbnails[old_key] = "icon"
+    session.state.rendered_thumbnails.add(old_key)
+
+    cls.replace_assets(session, {0: merged})
+
+    new_key = asset_thumbnail_key(merged)
+    assert session.state.thumbnails[new_key] == "icon"
+    assert new_key in session.state.rendered_thumbnails
+    # The frame it replaced is gone, so its own icon is not kept.
+    assert old_key not in session.state.thumbnails
+
+
+def test_an_inserted_merged_frame_carries_the_thumbnail_and_the_source_keeps_its_own():
+    from negpy.services.assets.thumbnails import asset_thumbnail_key
+
+    triplet = {"path": "/r.ARW", "hash": "red", "green_path": "/g.ARW", "blue_path": "/b.ARW"}
+    merged = {"path": "/r_RGB.tif", "hash": "new"}
+    session, cls = _thumb_session([triplet])
+    old_key = asset_thumbnail_key(triplet)
+    session.state.thumbnails[old_key] = "icon"
+    session.state.rendered_thumbnails.add(old_key)
+
+    cls.insert_assets(session, {0: merged})
+
+    assert session.state.thumbnails[asset_thumbnail_key(merged)] == "icon"
+    assert session.state.thumbnails[old_key] == "icon"
