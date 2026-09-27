@@ -2,22 +2,12 @@ import os
 
 from PyQt6.QtWidgets import QHBoxLayout
 
-from negpy.desktop.view.confirm import confirm_assembly_mode, confirm_triplet_merge
+from negpy.desktop.view.confirm import confirm_assembly_mode
+from negpy.desktop.view.frame_merge_action import LABELS, SCOPE_ROLL, merge_to_tiff, mergeable_in
 from negpy.desktop.view.sidebar.base import BaseSidebar
 from negpy.desktop.view.styles.templates import hint_label, wrap_tooltip
 from negpy.desktop.view.widgets.rgb_triplet_dialog import open_triplet_dialog
 from negpy.features.rgbscan.models import is_rgb_triplet
-
-
-def merge_roll_triplets(parent, controller) -> None:
-    """Merge Roll to TIFF: plan, confirm, then hand the triplets to the controller."""
-    indices, skipped = controller.triplet_merge_plan()
-    if not indices:
-        controller.set_status("No triplet in this roll can be merged", 4000)
-        return
-    trash = confirm_triplet_merge(parent, len(indices), skipped)
-    if trash is not None:
-        controller.request_triplet_merge(indices, trash)
 
 
 class TrichromeSidebar(BaseSidebar):
@@ -49,11 +39,11 @@ class TrichromeSidebar(BaseSidebar):
 
         self.merge_btn = self._labeled_action(
             "fa5s.object-group",
-            " Merge Roll to TIFF…",
-            wrap_tooltip(
-                "Write each triplet as one linear RGB TIFF next to its red exposure, carry the frame's "
-                "edit over, and optionally move the three exposures to the Trash"
-            ),
+            f" {LABELS[SCOPE_ROLL]}",
+            # Plain, not pre-wrapped: labeled_action wraps it, and apply_shortcut_tooltips
+            # builds the key chip from plain_tooltip, which markup would leave outside the <qt>.
+            "Write each triplet or stitch in this roll as one linear RGB TIFF beside its first source "
+            "file, carry the frame's edit over, and optionally move the source files to the Trash",
         )
         self.layout.addWidget(self.merge_btn)
 
@@ -64,7 +54,7 @@ class TrichromeSidebar(BaseSidebar):
         self.enable_btn.toggled.connect(self._on_toggled)
         self.controller.rgb_scan_mode_changed.connect(self._follow_mode)
         self.edit_btn.clicked.connect(lambda: open_triplet_dialog(self, self.controller.session))
-        self.merge_btn.clicked.connect(lambda: merge_roll_triplets(self, self.controller))
+        self.merge_btn.clicked.connect(lambda: merge_to_tiff(self, self.controller, SCOPE_ROLL))
         self.controller.session.files_changed.connect(self.sync_ui)
         self.sync_ui()
 
@@ -92,7 +82,7 @@ class TrichromeSidebar(BaseSidebar):
         try:
             self.enable_btn.setChecked(bool(self.controller.session.repo.get_global_setting("rgbscan_mode", False)))
             self.edit_btn.setEnabled(bool(self.state.uploaded_files))
-            self.merge_btn.setEnabled(any(f.get("green_path") and f.get("blue_path") for f in self.state.uploaded_files))
+            self.merge_btn.setEnabled(mergeable_in(self.state, SCOPE_ROLL))
             if is_rgb_triplet(conf):
                 green, blue = os.path.basename(conf.green_path), os.path.basename(conf.blue_path)
                 self.hint.setText(f"This frame is assembled with {green} and {blue}.")

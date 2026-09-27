@@ -8,34 +8,36 @@ from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
 from negpy.domain.models import TiffCompression, WorkspaceConfig
 from negpy.kernel.image.logic import calculate_file_hash
-from negpy.services.export.triplet_merge import decode_params, write_merged_triplet
+from negpy.services.export.frame_merge import decode_params, write_merged_frame
 from negpy.services.rendering.image_processor import ImageProcessor
 
 
 @dataclass(frozen=True)
-class TripletMergeTask:
-    """One triplet to merge. ``asset`` is a copy of its Film Strip entry."""
+class FrameMergeTask:
+    """One assembled frame to merge. ``asset`` is a copy of its Film Strip entry."""
 
     asset: dict
     params: WorkspaceConfig
     out_path: str
     compression: TiffCompression
+    kind: str
 
 
 @dataclass(frozen=True)
-class TripletMergeResult:
+class FrameMergeResult:
     asset: dict
     out_path: str
+    kind: str = ""
     new_hash: str = ""
     error: str = ""
 
 
-class TripletMergeWorker(QObject):
+class FrameMergeWorker(QObject):
     """Writes and verifies each merged TIFF. It deletes nothing: the controller moves the
-    exposures to the Trash once the edits have followed the frames."""
+    source files to the Trash once the edits have followed the frames."""
 
     progress = pyqtSignal(int, int, str)  # current, total, label
-    finished = pyqtSignal(list, bool)  # [TripletMergeResult], aborted
+    finished = pyqtSignal(list, bool)  # [FrameMergeResult], aborted
 
     def __init__(self) -> None:
         super().__init__()
@@ -47,9 +49,9 @@ class TripletMergeWorker(QObject):
         self._cancel.set()
 
     @pyqtSlot(list)
-    def run(self, tasks: List[TripletMergeTask]) -> None:
+    def run(self, tasks: List[FrameMergeTask]) -> None:
         self._cancel.clear()
-        results: List[TripletMergeResult] = []
+        results: List[FrameMergeResult] = []
         aborted = False
         try:
             for i, task in enumerate(tasks):
@@ -58,15 +60,21 @@ class TripletMergeWorker(QObject):
                     break
                 self.progress.emit(i + 1, len(tasks), os.path.basename(task.out_path))
                 try:
-                    f32, _ir, _cs = self._processor._decode_oriented_f32(task.asset["path"], decode_params(task.params))
-                    write_merged_triplet(f32, task.asset["path"], task.out_path, task.compression)
+                    # _load_source_f32, not _decode_oriented_f32: a stitch is assembled here,
+                    # and a single-file frame passes straight through it unchanged.
+                    params = decode_params(task.params, task.kind)
+                    f32, _ir, _cs = self._processor._load_source_f32(task.asset["path"], params)
+                    write_merged_frame(f32, task.asset["path"], task.out_path, params, task.compression)
                     del f32
                     new_hash = calculate_file_hash(task.out_path)
                     if new_hash.startswith("err_"):
                         raise OSError(f"Could not read {os.path.basename(task.out_path)} back")
-                    results.append(TripletMergeResult(task.asset, task.out_path, new_hash=new_hash))
+                    results.append(FrameMergeResult(task.asset, task.out_path, kind=task.kind, new_hash=new_hash))
                 except Exception as e:
-                    results.append(TripletMergeResult(task.asset, task.out_path, error=str(e)))
+                    results.append(FrameMergeResult(task.asset, task.out_path, kind=task.kind, error=str(e)))
+                # _load_source_f32 keeps its result in a single-slot cache; a stitch canvas
+                # held there across the batch is the largest buffer in the app.
+                self._processor.release_source_cache()
                 gc.collect()
         finally:
             self.finished.emit(results, aborted)

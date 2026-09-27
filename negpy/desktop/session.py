@@ -2005,14 +2005,39 @@ class DesktopSessionManager(QObject):
         marks = self.repo.load_file_marks()
         for i, asset in valid.items():
             self._drop_thumbnail(self.state.uploaded_files[i])
-            m = marks.get(asset["hash"])
+            m = marks.get(unforked_hash(asset["hash"]))
             self.state.uploaded_files[i] = {**asset, "keeper": m == "keeper", "excluded": m == "excluded"}
+        self._stamp_scenes()
         self.asset_model.refresh()
         self.files_changed.emit()
         self._persist_session()
         if self.state.selected_file_idx in valid:
             self._config_dirty = False
             self.select_file(self.state.selected_file_idx, selection_override=list(self.state.selected_indices))
+
+    def insert_assets(self, insertions: Dict[int, dict]) -> None:
+        """Add Film Strip entries ({index: new asset}) just after the ones they came from,
+        which stay. The selection does not move: the frame the user was on is still there."""
+        valid = {i: a for i, a in insertions.items() if 0 <= i < len(self.state.uploaded_files)}
+        if not valid:
+            return
+        marks = self.repo.load_file_marks()
+        for i in sorted(valid, reverse=True):
+            asset = valid[i]
+            m = marks.get(unforked_hash(asset["hash"]))
+            self.state.uploaded_files.insert(i + 1, {**asset, "keeper": m == "keeper", "excluded": m == "excluded"})
+
+        # Every insertion pushes the frames after it along, so a selection recorded as an
+        # index has to move with them or it names a different frame.
+        def shifted(idx: int) -> int:
+            return idx + sum(1 for i in valid if i < idx)
+
+        self.state.selected_file_idx = shifted(self.state.selected_file_idx)
+        self.state.selected_indices = [shifted(i) for i in self.state.selected_indices]
+        self._stamp_scenes()
+        self.asset_model.refresh()
+        self.files_changed.emit()
+        self._persist_session()
 
     def set_triplet(self, index: int, red_path: str, green_path: str, blue_path: str, align: bool = True) -> None:
         """Reassign the R/G/B exposures of an RGB-scan asset, then reload it."""

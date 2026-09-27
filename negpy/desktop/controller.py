@@ -22,6 +22,7 @@ from negpy.desktop.session import (
     DesktopSessionManager,
     ToolMode,
     _source_effective_bounds,
+    composite_kind,
     resolve_asset_hdr,
     resolve_asset_rgbscan,
     resolve_asset_stitch,
@@ -56,7 +57,7 @@ from negpy.desktop.workers.scan_worker import BatchRequest, MeterRequest, Presca
 from negpy.desktop.workers.library import LibrarySearchTask, LibrarySearchWorker
 from negpy.desktop.workers.hdr import HdrTask, HdrWorker
 from negpy.desktop.workers.stitch import StitchTask, StitchWorker
-from negpy.desktop.workers.triplet_merge import TripletMergeTask, TripletMergeWorker
+from negpy.desktop.workers.frame_merge import FrameMergeTask, FrameMergeWorker
 from negpy.features.hdr.models import ANCHOR_EV_UNSET, hdr_frame_paths, hdr_hash, hdr_name
 from negpy.features.process.capture_color import apply_camera_matrix, camera_to_working_matrix, lightbox_level, wb_only_cam_xyz
 from negpy.features.process.logic import (
@@ -106,8 +107,16 @@ from negpy.services.assets.half_frame import (
 )
 from negpy.services.export.templating import path_safe, render_export_filename
 from negpy.services.assets.sidecar import load_or_promote, sidecar_path_for, write_sidecar
-from negpy.services.assets.triplet_merge import carry_edit, carry_sidecar
-from negpy.services.export.triplet_merge import can_merge, merged_path_for
+from negpy.services.assets.frame_merge import carry_edit, carry_sidecar
+from negpy.services.export.frame_merge import (
+    MERGEABLE_KINDS,
+    can_merge,
+    describes_a_merge,
+    frame_files,
+    merged_path_for,
+    needs_camera_matrix,
+    part_files,
+)
 from negpy.features.exposure.analysis import (
     RING_GRID,
     STRIP_GRID,
@@ -393,7 +402,7 @@ class AppController(QObject):
     first_scene_created = pyqtSignal()  # the loaded roll's first scene: the Film Strip sorts by scene
     stitch_requested = pyqtSignal(object)
     hdr_requested = pyqtSignal(object)
-    triplet_merge_requested = pyqtSignal(list)
+    frame_merge_requested = pyqtSignal(list)
     thumbnail_requested = pyqtSignal(list)
     thumbnail_cancel_requested = pyqtSignal()
     thumbnail_update_requested = pyqtSignal(ThumbnailUpdateTask)
@@ -485,7 +494,7 @@ class AppController(QObject):
         self._first_render_t0: Optional[float] = None
         self._export_start_time = 0.0
         self._export_failures = 0
-        self._triplet_merge_trash = True
+        self._frame_merge_trash = True
         self._discovery_running = False
         self._auto_open_after_discovery = False
         self._replace_after_discovery = False
@@ -564,8 +573,8 @@ class AppController(QObject):
         self.stitch_worker.moveToThread(self.export_thread)
         self.hdr_worker = HdrWorker()
         self.hdr_worker.moveToThread(self.export_thread)
-        self.triplet_merge_worker = TripletMergeWorker()
-        self.triplet_merge_worker.moveToThread(self.export_thread)
+        self.frame_merge_worker = FrameMergeWorker()
+        self.frame_merge_worker.moveToThread(self.export_thread)
         self.export_thread.start()
 
         self.thumb_thread = QThread()
@@ -803,9 +812,9 @@ class AppController(QObject):
         self.stitch_worker.cancelled.connect(self._on_stitch_cancelled)
         self.stitch_worker.error.connect(self._on_stitch_error)
 
-        self.triplet_merge_requested.connect(self.triplet_merge_worker.run)
-        self.triplet_merge_worker.progress.connect(self._on_batch_progress)
-        self.triplet_merge_worker.finished.connect(self._on_triplet_merge_finished)
+        self.frame_merge_requested.connect(self.frame_merge_worker.run)
+        self.frame_merge_worker.progress.connect(self._on_batch_progress)
+        self.frame_merge_worker.finished.connect(self._on_frame_merge_finished)
 
         self.hdr_requested.connect(self.hdr_worker.run)
         self.hdr_worker.progress.connect(self._on_batch_progress)
@@ -1318,8 +1327,8 @@ class AppController(QObject):
             self.stitch_worker.cancel()
         elif self._active_batch == "hdr":
             self.hdr_worker.cancel()
-        elif self._active_batch == "triplet_merge":
-            self.triplet_merge_worker.cancel()
+        elif self._active_batch == "frame_merge":
+            self.frame_merge_worker.cancel()
         elif self._active_batch == "library_index":
             self._library_index_cancelled = True
             self.embedding_worker.cancel()
@@ -5002,100 +5011,144 @@ class AppController(QObject):
         self._end_batch("stitch")
         self.set_status(message, 6000, kind="error")
 
-    def triplet_merge_plan(self) -> tuple[list[int], list[str]]:
-        """Film Strip indices of the triplets Merge Roll to TIFF can merge, and a line for
-        each triplet it cannot."""
+    def frame_merge_plan(self, indices: Optional[list[int]] = None) -> tuple[list[int], list[str]]:
+        """Film Strip indices of the assembled frames Merge to TIFF can merge, and a line
+        for each one it cannot. *indices* scopes the search; None is the whole roll."""
+        scope = range(len(self.state.uploaded_files)) if indices is None else indices
         mergeable: list[int] = []
         skipped: list[str] = []
-        for i, f in enumerate(self.state.uploaded_files):
-            if not (f.get("green_path") and f.get("blue_path")):
+        for i in scope:
+            if not (0 <= i < len(self.state.uploaded_files)):
                 continue
-            if f.get("stitch_paths") or f.get("hdr_paths") or f.get("half"):
-                skipped.append(f"{f['name']}: part of a stitch")
-            elif not can_merge(f["path"], f["green_path"], f["blue_path"]):
-                skipped.append(f"{f['name']}: an exposure is missing or not a camera RAW")
+            f = self.state.uploaded_files[i]
+            kind = composite_kind(f)
+            if not kind:
+                continue
+            # Tested before the kind: a half of a triplet scan reads as "rgb", and two halves
+            # sharing one path cannot both be replaced by a file.
+            if f.get("half"):
+                skipped.append(f"{f['name']}: a half-frame scan cannot merge")
+            elif kind == "hdr":
+                skipped.append(f"{f['name']}: a bracket keeps its shadow detail and render exposure only unmerged")
+            elif kind not in MERGEABLE_KINDS:
+                skipped.append(f"{f['name']}: a {kind} cannot merge")
+            elif not can_merge(f, kind):
+                skipped.append(f"{f['name']}: a source file is missing or not a camera RAW")
+            elif needs_camera_matrix(self._batch_params_for(f)):
+                skipped.append(f"{f['name']}: a slide renders through its camera's color matrix, which a TIFF cannot carry")
+            elif not describes_a_merge(f["path"], self._batch_params_for(f)):
+                skipped.append(f"{f['name']}: this source format cannot name the merged file as an assembly")
             else:
                 mergeable.append(i)
         return mergeable, skipped
 
-    def request_triplet_merge(self, indices: list[int], trash: bool) -> None:
-        """Merge each triplet at *indices* into a TIFF next to its red exposure. With
-        *trash*, its three exposures go to the Trash once its edit has moved over."""
-        if self._batch_busy("Merge Roll to TIFF"):
+    def request_frame_merge(self, paths: list[str], trash: bool) -> None:
+        """Merge each assembled frame in *paths* into a TIFF beside its primary source.
+        With *trash*, the files it was made of go to the Trash once its edit has moved.
+
+        Paths, not indices: the confirm dialog spins the event loop, so a discovery that
+        lands while it is open would leave an index naming a different frame.
+        """
+        if self._batch_busy("Merge to TIFF"):
             return
         self.session.save_active_edit()
+        by_path = {f["path"]: f for f in self.state.uploaded_files}
         taken: set[str] = set()
         tasks = []
-        for i in indices:
-            f = self.state.uploaded_files[i]
-            out_path = merged_path_for(f["path"], frozenset(taken))
+        for path in paths:
+            f = by_path.get(path)
+            if f is None:
+                continue
+            kind = composite_kind(f)
+            out_path = merged_path_for(f["path"], kind, frozenset(taken))
             taken.add(out_path)
             tasks.append(
-                TripletMergeTask(
+                FrameMergeTask(
                     asset=dict(f),
                     params=self._batch_params_for(f),
                     out_path=out_path,
                     compression=self.state.config.export.tiff_compression,
+                    kind=kind,
                 )
             )
-        if not tasks or self._begin_batch("triplet_merge", "Merging triplets", abortable=True) is None:
+        if not tasks or self._begin_batch("frame_merge", "Merging frames", abortable=True) is None:
             return
-        self._triplet_merge_trash = trash
-        self.triplet_merge_requested.emit(tasks)
+        self._frame_merge_trash = trash
+        self.frame_merge_requested.emit(tasks)
 
-    def _on_triplet_merge_finished(self, results: list, aborted: bool) -> None:
-        """Move each merged frame's edit to its TIFF, swap it into the Film Strip, then
-        trash its exposures. A frame whose edit did not move keeps its exposures."""
-        self._end_batch("triplet_merge")
+    def _on_frame_merge_finished(self, results: list, aborted: bool) -> None:
+        """Move each merged frame's edit to its TIFF and put it in the Film Strip.
+
+        Trashing the sources replaces the frame they made; keeping them adds the merged file
+        beside it, because a source the user chose to keep is one they can still open.
+        A frame whose edit did not move keeps its sources either way.
+        """
+        self._end_batch("frame_merge")
         self.session.save_active_edit()
         repo = self.session.repo
-        index_by_path = {f["path"]: i for i, f in enumerate(self.state.uploaded_files) if f.get("green_path")}
+        index_by_path = {f["path"]: i for i, f in enumerate(self.state.uploaded_files) if composite_kind(f)}
         replacements: dict[int, dict] = {}
         failed = 0
         kept = 0
         for r in results:
             if r.error:
                 failed += 1
-                logger.warning("Merge Roll to TIFF failed for %s: %s", r.asset["name"], r.error)
+                logger.warning("Merge to TIFF failed for %s: %s", r.asset["name"], r.error)
                 continue
-            red, green, blue = r.asset["path"], r.asset["green_path"], r.asset["blue_path"]
-            red_hash = rolls.unforked_hash(r.asset["hash"])
-            red_sidecar = sidecar_path_for(red)
+            primary = r.asset["path"]
+            parts = part_files(r.asset, r.kind)
+            sidecars = [sidecar_path_for(p) for p in frame_files(r.asset, r.kind)]
+            # A stitch's hash keeps its "#stitch" suffix; only a roll fork is stripped.
+            old_hash = rolls.unforked_hash(r.asset["hash"])
             try:
-                config = repo.load_file_settings(red_hash) or self.session.config_for_asset({**r.asset, "hash": red_hash})
-                carry_edit(repo, red_hash, red, r.new_hash, r.out_path, [green, blue], config)
-                carry_sidecar(red, r.out_path, config)
+                config = repo.load_file_settings(old_hash) or self.session.config_for_asset({**r.asset, "hash": old_hash})
+                # Only a trashed source leaves its roll: one left on disk is still a frame,
+                # and still belongs to the roll it was always in.
+                keep = not self._frame_merge_trash
+                carry_edit(repo, old_hash, primary, r.new_hash, r.out_path, [] if keep else parts, config, r.kind, keep)
+                carry_sidecar(primary, r.out_path, config, r.kind)
             except Exception as e:
                 failed += 1
-                logger.warning("Merge Roll to TIFF could not move the edit of %s: %s", r.asset["name"], e)
+                logger.warning("Merge to TIFF could not move the edit of %s: %s", r.asset["name"], e)
                 continue
+            if r.kind == "stitch" and self._frame_merge_trash:
+                # The membership record outlives the file list, so without this discovery
+                # re-attaches the parts and keeps hiding them from the Film Strip. Kept parts
+                # keep the record: the composite is still a frame and must still assemble.
+                forget_composite(repo, primary)
             new_asset = {
                 "name": os.path.basename(r.out_path),
                 "path": r.out_path,
                 "hash": r.new_hash,
                 "legacy_hash": "",
                 "mtime": os.path.getmtime(r.out_path),
+                # A composite inherited its film process from its parts; a fresh hash would
+                # otherwise take the sticky mode instead.
+                "process_mode": r.asset.get("process_mode", ""),
             }
             self._apply_roll_forks([new_asset])
-            if red in index_by_path:
-                replacements[index_by_path[red]] = new_asset
-            if self._triplet_merge_trash:
-                for path in (red, green, blue, red_sidecar):
+            if primary in index_by_path:
+                replacements[index_by_path[primary]] = new_asset
+            if self._frame_merge_trash:
+                for path in (primary, *parts, *sidecars):
                     if os.path.exists(path) and not _move_to_trash(path):
                         kept += 1
-                        logger.warning("Merge Roll to TIFF could not move %s to the Trash", path)
-        self.session.replace_assets(replacements)
+                        logger.warning("Merge to TIFF could not move %s to the Trash", path)
+        if self._frame_merge_trash:
+            self.session.replace_assets(replacements)
+        else:
+            self.session.insert_assets(replacements)
         self.generate_missing_thumbnails()
 
         merged = len(results) - failed
-        parts = [f"Merged {count_of(merged, 'triplet')}"]
+        parts_msg = [f"Merged {count_of(merged, 'frame')}"]
         if aborted:
-            parts.append("aborted")
+            parts_msg.append("aborted")
         if failed:
-            parts.append(f"{failed} failed")
+            parts_msg.append(f"{failed} failed")
         if kept:
-            parts.append(f"{count_of(kept, 'file')} could not go to the Trash")
-        self.set_status(", ".join(parts), 8000, kind="warning" if failed or kept else "info")
+            parts_msg.append(f"{count_of(kept, 'file')} could not go to the Trash")
+        self.set_status(", ".join(parts_msg), 8000, kind="warning" if failed or kept else "info")
 
     def request_unstitch(self) -> None:
         """Dissolve the active stitched composite back into its part frames.

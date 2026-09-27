@@ -308,10 +308,20 @@ def rolls_containing_path(repo: Any, path: str) -> List[str]:
     return out
 
 
-def adopt_replacement(repo: Any, old_hash: str, new_hash: str, old_path: str, new_path: str, dropped_paths: List[str]) -> List[str]:
+def adopt_replacement(
+    repo: Any,
+    old_hash: str,
+    new_hash: str,
+    old_path: str,
+    new_path: str,
+    dropped_paths: List[str],
+    keep_source: bool = False,
+) -> List[str]:
     """Give *new_path* the roll records of the file it replaces: its membership, its card
     locks, its scene and its forks. *dropped_paths* leave every roll. The old hash keeps
-    its locks, scene and forks, so a file restored from the Trash keeps them. Returns the ids of
+    its locks, scene and forks, so a file restored from the Trash keeps them. With
+    *keep_source* the old path stays a member beside the new one, for a replacement whose
+    sources are left on disk and stay frames of their own. Returns the ids of
     the rolls whose fork of *old_hash* the caller must copy."""
     store = _read(repo)
     gone = set(dropped_paths)
@@ -319,7 +329,9 @@ def adopt_replacement(repo: Any, old_hash: str, new_hash: str, old_path: str, ne
     for roll_id, entry in store.items():
         for key in ("extra_paths", "member_paths"):
             if key in entry:
-                paths = [new_path if p == old_path else p for p in entry[key] if p not in gone]
+                paths = [p for p in entry[key] if p not in gone]
+                if old_path in paths:
+                    paths = [*paths, new_path] if keep_source else [new_path if p == old_path else p for p in paths]
                 entry[key] = list(dict.fromkeys(paths))
         overrides = entry.get("frame_overrides", {})
         if old_hash in overrides and new_hash not in overrides:

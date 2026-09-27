@@ -953,10 +953,11 @@ class AssetDiscoveryWorker(QObject):
             probe_frame,
         )
 
-        from negpy.services.export.triplet_merge import is_merged_triplet
+        from negpy.services.export.frame_merge import is_merged_source
 
-        # A merged triplet is already one frame: it is neither grouped nor counted loose.
-        done = {a["path"] for a in assets if (a.get("green_path") and a.get("blue_path")) or is_merged_triplet(a["path"])}
+        # A file NegPy merged from an assembled frame is already one frame: it is neither
+        # grouped nor counted loose.
+        done = {a["path"] for a in assets if (a.get("green_path") and a.get("blue_path")) or is_merged_source(a["path"])}
         assembled = [a for a in assets if a["path"] in done]
         assets = [a for a in assets if a["path"] not in done]
         if not assets:
