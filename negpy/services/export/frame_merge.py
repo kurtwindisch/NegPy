@@ -12,7 +12,7 @@ import hashlib
 import os
 import tempfile
 from dataclasses import replace
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 import tifffile
@@ -47,6 +47,10 @@ _MERGED_FORMATS = ("camera RAW (RGB triplet)", "camera RAW (stitch ")
 
 class MergeVerifyError(RuntimeError):
     """The file on disk does not hold the buffer that was written."""
+
+
+class MergeCancelled(RuntimeError):
+    """Abort was pressed. Nothing was written, so the frame keeps its sources."""
 
 
 def part_files(asset: dict, kind: str) -> List[str]:
@@ -175,11 +179,16 @@ def write_merged_frame(
     out_path: str,
     params: WorkspaceConfig,
     compression: TiffCompression = TiffCompression.ZIP,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> None:
     """Write *f32* as an untagged 16-bit TIFF at *out_path* and prove it reads back identical.
 
     The file is written and verified under a temporary name, then renamed, so *out_path*
     exists only when it holds the whole buffer. An existing *out_path* is never replaced.
+
+    *should_cancel* is polled at the last moment before the rename, so an abort during the
+    write leaves nothing at *out_path* and the temporary file is removed. That rename is the
+    only irreversible step here: until it lands the frame still has all its sources.
     """
     expected = _digest(_to_uint16_jit(np.ascontiguousarray(f32, dtype=np.float32)))
     folder = os.path.dirname(out_path) or "."
@@ -200,6 +209,8 @@ def write_merged_frame(
         written = tifffile.imread(tmp_path)
         if written.dtype != np.uint16 or written.shape != f32.shape or _digest(written) != expected:
             raise MergeVerifyError(f"{os.path.basename(out_path)} did not read back as written")
+        if should_cancel is not None and should_cancel():
+            raise MergeCancelled(os.path.basename(out_path))
         if os.path.exists(out_path):
             raise FileExistsError(out_path)
         os.replace(tmp_path, out_path)

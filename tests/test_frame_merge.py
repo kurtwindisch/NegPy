@@ -20,6 +20,7 @@ from negpy.services.assets.sidecar import load_sidecar, sidecar_path_for, write_
 from negpy.services.assets.frame_merge import carry_edit, carry_sidecar, merged_edit
 from negpy.services.export import frame_merge
 from negpy.services.export.frame_merge import (
+    MergeCancelled,
     MergeVerifyError,
     can_merge,
     decode_params,
@@ -747,3 +748,58 @@ def test_an_inserted_merged_frame_carries_the_thumbnail_and_the_source_keeps_its
 
     assert session.state.thumbnails[asset_thumbnail_key(merged)] == "icon"
     assert session.state.thumbnails[old_key] == "icon"
+
+
+def test_abort_during_the_write_leaves_the_frame_untouched(tmp_path):
+    """The rename is the only irreversible step, so a cancel just before it costs nothing."""
+    red, green, blue = _triplet(tmp_path)
+    out = merged_path_for(red, "rgb")
+
+    with pytest.raises(MergeCancelled):
+        write_merged_frame(
+            np.full((8, 10, 3), 0.25, dtype=np.float32),
+            red,
+            out,
+            _triplet_config(green, blue),
+            should_cancel=lambda: True,
+        )
+
+    assert not os.path.exists(out)
+    assert not [f for f in os.listdir(tmp_path) if f.endswith(".part")]
+    assert sorted(os.path.basename(p) for p in (red, green, blue)) == sorted(f for f in os.listdir(tmp_path) if f.endswith(".ARW"))
+
+
+def test_a_cancelled_frame_is_neither_merged_nor_failed(tmp_path, monkeypatch):
+    """Abort during the decode must hand back no result, or the controller would trash the
+    sources of a frame that was never written."""
+    import negpy.desktop.workers.frame_merge as worker_mod
+
+    red, green, blue = _triplet(tmp_path)
+    w = worker_mod.FrameMergeWorker()
+    task = worker_mod.FrameMergeTask(
+        asset=_asset(red, green, blue),
+        params=_triplet_config(green, blue),
+        out_path=merged_path_for(red, "rgb"),
+        compression=WorkspaceConfig().export.tiff_compression,
+        kind="rgb",
+    )
+
+    # Abort lands while the decode is running; the decode itself cannot be interrupted.
+    def decode(path, params, fast_decode=False):
+        w.cancel()
+        return np.zeros((8, 10, 3), dtype=np.float32), None, "srgb"
+
+    monkeypatch.setattr(w._processor, "_load_source_f32", decode)
+    seen = []
+    w.finished.connect(lambda results, aborted: seen.append((results, aborted)))
+    w.run([task])
+
+    results, aborted = seen[0]
+    assert aborted is True
+    assert results == []
+    assert not os.path.exists(task.out_path)
+    assert sorted(f for f in os.listdir(tmp_path) if f.endswith(".ARW")) == [
+        "IMG_1.ARW",
+        "IMG_2.ARW",
+        "IMG_3.ARW",
+    ]
