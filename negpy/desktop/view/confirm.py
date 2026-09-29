@@ -194,16 +194,18 @@ def confirm_assembly_mode(parent, mode: str, count: int) -> bool:
 
 
 def confirm_frame_merge(parent, title: str, counts: dict, skipped: list) -> Optional[bool]:
-    """Ask before a Merge to TIFF. None on Cancel, else whether the sources go to the Trash.
+    """Ask before a Merge to TIFF Negative. None on Cancel, else whether the sources go to the Trash.
 
     *counts* is mergeable frames per composite kind, so the question names what it found.
     """
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Question)
     box.setWindowTitle(title)
-    box.setText(f"Merge {_merge_subject(counts)} into {'a TIFF' if sum(counts.values()) == 1 else 'TIFFs'}?")
+    one = sum(counts.values()) == 1
+    box.setText(f"Merge {_merge_subject(counts)} into {'a TIFF negative' if one else 'TIFF negatives'}?")
     lines = [
-        "Each TIFF is written next to its primary source file and takes over the frame's edit. The export demosaic is fixed in the file."
+        "Each one is a linear negative, not a positive export: it is written next to its primary source "
+        "file and takes over the frame's edit. The export demosaic is fixed in the file."
     ]
     if counts.get("stitch"):
         lines.append(

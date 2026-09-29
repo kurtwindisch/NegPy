@@ -1,4 +1,4 @@
-"""Merge to TIFF, the one action behind every surface that offers it.
+"""Merge to TIFF Negative, the one action behind every surface that offers it.
 
 A free function rather than a method so the Frame Assembly card, both Film Strip menus, the
 canvas menu, the Camera Scanning panel and the shortcut map all ask the same question and
@@ -16,9 +16,9 @@ SCOPE_SELECTION = "selection"
 SCOPE_ROLL = "roll"
 
 LABELS = {
-    SCOPE_FRAME: "Merge Frame to TIFF…",
-    SCOPE_SELECTION: "Merge Selected to TIFF…",
-    SCOPE_ROLL: "Merge Roll to TIFF…",
+    SCOPE_FRAME: "Merge Frame to TIFF Negative…",
+    SCOPE_SELECTION: "Merge Selected to TIFF Negative…",
+    SCOPE_ROLL: "Merge Roll to TIFF Negative…",
 }
 
 ACTION_IDS = {SCOPE_FRAME: "merge_frame", SCOPE_SELECTION: "merge_selected", SCOPE_ROLL: "merge_roll"}

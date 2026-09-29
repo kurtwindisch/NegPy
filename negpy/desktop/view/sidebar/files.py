@@ -1927,7 +1927,7 @@ class FileBrowser(QWidget):
         act.triggered.connect(lambda: self.controller.request_hdr_merge_selected())
 
     def _add_merge_to_tiff_action(self, menu, state, scope: str) -> None:
-        """Merge to TIFF for *scope*, hidden when nothing in scope is an assembled frame.
+        """Merge to TIFF Negative for *scope*, hidden when nothing in scope is an assembled frame.
 
         Why a frame is refused belongs in the confirm dialog, which can say it in a
         sentence, not in a tooltip on a greyed-out item.

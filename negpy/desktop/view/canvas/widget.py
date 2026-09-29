@@ -749,7 +749,7 @@ class ImageCanvas(QWidget):
         menu.exec(global_pos)
 
     def _add_merge_to_tiff_action(self, menu: QMenu) -> None:
-        """Merge to TIFF for the frame on the canvas. Frame scope only: the canvas shows one
+        """Merge to TIFF Negative for the frame on the canvas. Frame scope only: the canvas shows one
         frame, and a selection-scoped item here would act on frames the user cannot see."""
         if self._controller is None or not mergeable_in(self.state, SCOPE_FRAME):
             return

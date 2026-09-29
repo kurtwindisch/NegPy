@@ -1,7 +1,7 @@
-"""Merge an assembled frame into one linear RGB TIFF that replaces the files it is made of.
+"""Merge an assembled frame into one TIFF negative that replaces the files it is made of.
 
-A Trichrome triplet and a stitch composite both become a single working negative: fewer
-files to keep, and the frame's edit carries over.
+A Trichrome triplet and a stitch composite both become a single linear working negative --
+not a positive export: fewer files to keep, and the frame's edit carries over.
 
 The buffer comes from the render decode (`ImageProcessor._load_source_f32`), not Linear
 Output's own decode, so the file holds exactly the source the pipeline inverted. Which

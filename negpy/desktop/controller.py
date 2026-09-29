@@ -5012,7 +5012,7 @@ class AppController(QObject):
         self.set_status(message, 6000, kind="error")
 
     def frame_merge_plan(self, indices: Optional[list[int]] = None) -> tuple[list[int], list[str]]:
-        """Film Strip indices of the assembled frames Merge to TIFF can merge, and a line
+        """Film Strip indices of the assembled frames Merge to TIFF Negative can merge, and a line
         for each one it cannot. *indices* scopes the search; None is the whole roll."""
         scope = range(len(self.state.uploaded_files)) if indices is None else indices
         mergeable: list[int] = []
@@ -5049,7 +5049,7 @@ class AppController(QObject):
         Paths, not indices: the confirm dialog spins the event loop, so a discovery that
         lands while it is open would leave an index naming a different frame.
         """
-        if self._batch_busy("Merge to TIFF"):
+        if self._batch_busy("Merge to TIFF Negative"):
             return
         self.session.save_active_edit()
         by_path = {f["path"]: f for f in self.state.uploaded_files}
@@ -5071,7 +5071,7 @@ class AppController(QObject):
                     kind=kind,
                 )
             )
-        if not tasks or self._begin_batch("frame_merge", "Merging frames", abortable=True) is None:
+        if not tasks or self._begin_batch("frame_merge", "Merging to TIFF negatives", abortable=True) is None:
             return
         self._frame_merge_trash = trash
         self.frame_merge_requested.emit(tasks)
@@ -5093,7 +5093,7 @@ class AppController(QObject):
         for r in results:
             if r.error:
                 failed += 1
-                logger.warning("Merge to TIFF failed for %s: %s", r.asset["name"], r.error)
+                logger.warning("Merge to TIFF Negative failed for %s: %s", r.asset["name"], r.error)
                 continue
             primary = r.asset["path"]
             parts = part_files(r.asset, r.kind)
@@ -5109,7 +5109,7 @@ class AppController(QObject):
                 carry_sidecar(primary, r.out_path, config, r.kind)
             except Exception as e:
                 failed += 1
-                logger.warning("Merge to TIFF could not move the edit of %s: %s", r.asset["name"], e)
+                logger.warning("Merge to TIFF Negative could not move the edit of %s: %s", r.asset["name"], e)
                 continue
             if r.kind == "stitch" and self._frame_merge_trash:
                 # The membership record outlives the file list, so without this discovery
@@ -5133,7 +5133,7 @@ class AppController(QObject):
                 for path in (primary, *parts, *sidecars):
                     if os.path.exists(path) and not _move_to_trash(path):
                         kept += 1
-                        logger.warning("Merge to TIFF could not move %s to the Trash", path)
+                        logger.warning("Merge to TIFF Negative could not move %s to the Trash", path)
         if self._frame_merge_trash:
             self.session.replace_assets(replacements)
         else:
@@ -5141,7 +5141,7 @@ class AppController(QObject):
         self.generate_missing_thumbnails()
 
         merged = len(results) - failed
-        parts_msg = [f"Merged {count_of(merged, 'frame')}"]
+        parts_msg = [f"Merged {count_of(merged, 'frame')} to TIFF negatives"]
         if aborted:
             parts_msg.append("aborted")
         if failed:

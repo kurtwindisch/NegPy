@@ -1,5 +1,6 @@
-"""Merge to TIFF: a Trichrome triplet or a stitch composite becomes one linear TIFF that
-renders the same frame, carries the edit, and never costs a source it could not replace."""
+"""Merge to TIFF Negative: a Trichrome triplet or a stitch composite becomes one linear
+negative that renders the same frame, carries the edit, and never costs a source it could
+not replace."""
 
 import os
 from dataclasses import replace
