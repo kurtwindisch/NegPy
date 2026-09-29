@@ -246,6 +246,7 @@ def _finish(tmp_path, monkeypatch, results, trash=True):
     # A real config, not a mock: the carry writes a row for a frame with no saved edit, so
     # merged_edit runs on whatever this returns.
     ctrl.session.config_for_asset = lambda asset: WorkspaceConfig()
+    ctrl._already_merged_to = lambda r: AppController._already_merged_to(ctrl, r)
     return ctrl, trashed, AppController._on_frame_merge_finished
 
 
@@ -804,3 +805,42 @@ def test_a_cancelled_frame_is_neither_merged_nor_failed(tmp_path, monkeypatch):
         "IMG_2.ARW",
         "IMG_3.ARW",
     ]
+
+
+def test_path_for_file_hash_finds_the_file_an_edit_was_saved_against(tmp_path):
+    repo = _repo(tmp_path)
+    assert repo.path_for_file_hash("nothing") is None
+    repo.save_file_settings("h", WorkspaceConfig(), file_path="/negs/a_RGB.tif")
+    assert repo.path_for_file_hash("h") == "/negs/a_RGB.tif"
+    repo.save_file_settings("h2", WorkspaceConfig())
+    assert repo.path_for_file_hash("h2") is None
+
+
+def test_a_second_merge_is_refused_and_changes_nothing(tmp_path, monkeypatch):
+    """The same frame merges to the same bytes, so the second copy is discarded and the
+    frame is left alone — its first negative keeps the edit it already carries."""
+    from negpy.desktop.workers.frame_merge import FrameMergeResult
+
+    red, green, blue = _triplet(tmp_path)
+    original = str(tmp_path / "IMG_1_RGB.tif")
+    duplicate = str(tmp_path / "IMG_1_RGB_2.tif")
+    for f in (original, duplicate):
+        open(f, "wb").close()
+    asset = _asset(red, green, blue)
+    results = [FrameMergeResult(asset, duplicate, kind="rgb", new_hash="same")]
+    ctrl, trashed, finish = _finish(tmp_path, monkeypatch, results)
+    ctrl.state.uploaded_files = [asset]
+    first = replace(_triplet_config(green, blue), geometry=replace(WorkspaceConfig().geometry, rotation=2))
+    ctrl.session.repo.save_file_settings("same", first, file_path=original)
+
+    finish(ctrl, results, False)
+
+    assert not os.path.exists(duplicate), "the byte-identical second write is discarded"
+    assert os.path.exists(original)
+    assert trashed == [], "the frame keeps its exposures"
+    assert ctrl.session.replace_assets.call_args.args[0] == {}, "the film strip is untouched"
+    # The existing negative's edit is not overwritten, which is the whole point of refusing.
+    assert ctrl.session.repo.load_file_settings("same").geometry.rotation == 2
+    msg = ctrl.set_status.call_args.args[0]
+    assert "already merged" in msg and "delete the negative" in msg
+    assert "unmerge" not in msg.lower()

@@ -170,6 +170,19 @@ class StorageRepository(IRepository):
                 return WorkspaceConfig.from_flat_dict(data)
         return None
 
+    def path_for_file_hash(self, file_hash: str) -> Optional[str]:
+        """The file this hash's edit was last saved against, or None.
+
+        Identity is the content, so two files with the same bytes are one frame. This is how
+        a merge recognizes a negative it has already written.
+        """
+        with self._connect(self.edits_db_path) as conn:
+            row = conn.execute(
+                "SELECT file_path FROM file_settings WHERE file_hash = ? AND file_path IS NOT NULL AND file_path != ''",
+                (file_hash,),
+            ).fetchone()
+        return str(row[0]) if row else None
+
     def delete_file_settings(self, file_hash: str) -> None:
         """Delete this hash's saved edit, its undo history and its work prints.
 

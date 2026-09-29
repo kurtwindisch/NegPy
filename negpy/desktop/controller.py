@@ -5076,6 +5076,24 @@ class AppController(QObject):
         self._frame_merge_trash = trash
         self.frame_merge_requested.emit(tasks)
 
+    def _already_merged_to(self, r) -> Optional[str]:
+        """The negative this frame was merged to before, when one is still on disk.
+
+        No edit changes a merged negative's pixels, so merging a frame twice writes the same
+        bytes and lands on the same content hash. The hash is only known once the file is
+        written, so the second copy is recognized here and discarded rather than refused up
+        front. The frame is then left exactly as it was: nothing overwrites the edit the
+        first negative already carries.
+        """
+        existing = self.session.repo.path_for_file_hash(r.new_hash)
+        if not existing or existing == r.out_path or not os.path.exists(existing):
+            return None
+        try:
+            os.remove(r.out_path)
+        except OSError as e:
+            logger.warning("Merge to TIFF Negative could not remove the duplicate %s: %s", r.out_path, e)
+        return existing
+
     def _on_frame_merge_finished(self, results: list, aborted: bool) -> None:
         """Move each merged frame's edit to its TIFF and put it in the Film Strip.
 
@@ -5090,10 +5108,20 @@ class AppController(QObject):
         replacements: dict[int, dict] = {}
         failed = 0
         kept = 0
+        already: list[str] = []
         for r in results:
             if r.error:
                 failed += 1
                 logger.warning("Merge to TIFF Negative failed for %s: %s", r.asset["name"], r.error)
+                continue
+            existing = self._already_merged_to(r)
+            if existing is not None:
+                already.append(r.asset["name"])
+                logger.info(
+                    "Merge to TIFF Negative: %s is already merged to %s; delete it to merge again",
+                    r.asset["name"],
+                    os.path.basename(existing),
+                )
                 continue
             primary = r.asset["path"]
             parts = part_files(r.asset, r.kind)
@@ -5140,15 +5168,18 @@ class AppController(QObject):
             self.session.insert_assets(replacements)
         self.generate_missing_thumbnails()
 
-        merged = len(results) - failed
+        merged = len(results) - failed - len(already)
         parts_msg = [f"Merged {count_of(merged, 'frame')} to TIFF negatives"]
         if aborted:
             parts_msg.append("aborted")
+        if already:
+            one = already[0] if len(already) == 1 else ""
+            parts_msg.append(f"{one or count_of(len(already), 'frame')} already merged — delete the negative to merge again")
         if failed:
             parts_msg.append(f"{failed} failed")
         if kept:
             parts_msg.append(f"{count_of(kept, 'file')} could not go to the Trash")
-        self.set_status(", ".join(parts_msg), 8000, kind="warning" if failed or kept else "info")
+        self.set_status(", ".join(parts_msg), 8000, kind="warning" if failed or kept or already else "info")
 
     def request_unstitch(self) -> None:
         """Dissolve the active stitched composite back into its part frames.
