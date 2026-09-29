@@ -30,7 +30,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from negpy.desktop.view.frame_merge_action import LABELS, SCOPE_ROLL, merge_to_tiff, mergeable_in
 from negpy.desktop.view.sidebar.calibration_window import CalibrationWindow
 from negpy.desktop.view.sidebar.live_view_window import LiveViewWindow, SettingStepper
 from negpy.desktop.view.styles.templates import (
@@ -321,14 +320,6 @@ class ScanlightSidebar(QWidget):
         self.roll_edit.setToolTip("Roll name — one folder/file name (no / or \\); the frame number is assigned automatically per roll")
         out_form.addRow("Roll", self.roll_edit)
         layout.addLayout(out_form)
-        # Not inside _rgb_section: a white-light camera scan can be stitched too.
-        self.merge_btn = labeled_action(
-            "fa5s.object-group",
-            f" {LABELS[SCOPE_ROLL]}",
-            "Write each triplet or stitch in the film strip as one linear RGB TIFF beside its first "
-            "source file, carry the frame's edit over, and optionally move the source files to the Trash",
-        )
-        layout.addWidget(self.merge_btn)
 
         # RGB section (Scanlight only): presets, level sliders and calibration.
         # Shown when the Scanlight is connected. Hidden for normal white-light camera
@@ -410,9 +401,6 @@ class ScanlightSidebar(QWidget):
 
     def _connect_signals(self) -> None:
         self.off_btn.clicked.connect(self._on_light_off)
-        self.merge_btn.clicked.connect(lambda: merge_to_tiff(self, self.controller, SCOPE_ROLL))
-        self.controller.session.files_changed.connect(self._sync_merge_btn)
-        self._sync_merge_btn()
         self.folder_browse.clicked.connect(self._on_browse_folder)
         self.lv_btn.toggled.connect(self._on_live_view_toggled)
         self.preset_combo.activated.connect(self._on_preset_selected)
@@ -463,12 +451,7 @@ class ScanlightSidebar(QWidget):
         """Called when the Scan tab is switched to — kick an immediate connection poll."""
         self._refresh_setup_hint()  # re-check whether python-gphoto2 is installed
         self._apply_gating()  # refresh the "what's still missing to scan" hint
-        self._sync_merge_btn()
         self._poll_connection_tick()
-
-    def _sync_merge_btn(self) -> None:
-        """Merging needs an assembled frame loaded, and the batch lane a scan is not using."""
-        self.merge_btn.setEnabled(not self._scanning and mergeable_in(self.controller.session.state, SCOPE_ROLL))
 
     def _disable_wheel(self) -> None:
         """Stop the mouse wheel from changing values (avoids accidental scroll edits)."""
@@ -1694,7 +1677,6 @@ class ScanlightSidebar(QWidget):
             self.progress_bar.setValue(0)
         self.lv_window.set_scanning(active)
         self._apply_gating()  # a running scan locks the "+" calibration button
-        self._sync_merge_btn()
 
     def _update_inter_exposure_delay_label(self) -> None:
         self.inter_exposure_delay_value.setText(f"{self.inter_exposure_delay_slider.value()} ms")
