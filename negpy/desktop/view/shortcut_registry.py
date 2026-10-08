@@ -79,7 +79,7 @@ REGISTRY: dict[str, ShortcutEntry] = {
     "toggle_right_click_excludes": ShortcutEntry("", "Toggle right-click excludes from Optical Removal", "Retouch"),
     "toggle_ir_removal": ShortcutEntry("", "Toggle IR Removal", "Retouch"),
     "toggle_flat_field": ShortcutEntry("", "Toggle Apply Flat Field", "Geometry"),
-    "batch_autocrop": ShortcutEntry("", "Auto crop all frames together", "Geometry"),
+    "batch_autocrop": ShortcutEntry("", "Auto-crop all frames", "Geometry"),
     "toggle_auto_density": ShortcutEntry("", "Toggle Auto Density", "Exposure"),
     "toggle_auto_grade": ShortcutEntry("", "Toggle Auto Grade", "Exposure"),
     "toggle_auto_both": ShortcutEntry("", "Toggle Auto Density and Auto Grade together", "Exposure"),
