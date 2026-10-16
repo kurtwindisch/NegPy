@@ -112,7 +112,8 @@ def apply_lens(
     orientation: int = 1,
     corrections: LensCorrections = LensCorrections(True, True),
 ) -> ImageBuffer:
-    """Apply selected embedded warps, with bounded temporary map memory."""
+    """Apply selected embedded warps, with bounded temporary map memory. A 2D plane (an IR
+    frame) takes the red channel's map, the nearest wavelength."""
     if not corrections or not lens.available or min(img.shape[:2]) < 2:
         return img
     inverse_orientation = {6: 8, 8: 6}.get(orientation, orientation)
@@ -125,12 +126,13 @@ def apply_lens(
         warp_lens = filled if i == len(applied) - 1 else lens
         h, w = source.shape[:2]
         result = np.empty_like(source)
-        for channel in range(3):
-            plane = np.ascontiguousarray(source[..., channel])
+        for channel in range(3 if source.ndim == 3 else 1):
+            plane = np.ascontiguousarray(source[..., channel]) if source.ndim == 3 else source
+            out = result[..., channel] if source.ndim == 3 else result
             for start in range(0, h, 256):
                 stop = min(start + 256, h)
                 mx, my = warp.remap(warp_lens, source.shape, start, stop, channel, corrections)
-                result[start:stop, :, channel] = cv2.remap(plane, mx, my, cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+                out[start:stop] = cv2.remap(plane, mx, my, cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
         # Flat-field gains can exceed white before sensor unmix.
         source = np.maximum(result, 0.0, out=result)
     return np.ascontiguousarray(apply_exif_orientation(source, orientation))

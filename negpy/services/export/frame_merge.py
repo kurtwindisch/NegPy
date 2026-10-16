@@ -176,3 +176,26 @@ def write_merged_frame(
         if tmp_path is not None and os.path.exists(tmp_path):
             os.unlink(tmp_path)
     sync_export_filesystem_dates(out_path, primary_path)
+
+
+def merged_ir_path(out_path: str) -> str:
+    """The `_IR` companion of a merged TIFF, which the TIFF loader reads beside it."""
+    return os.path.splitext(out_path)[0] + "_IR" + MERGED_EXT
+
+
+def write_merged_ir(ir: np.ndarray, out_path: str) -> None:
+    """Write the frame's IR plane, in the merged TIFF's pixel grid, as its `_IR` companion, so
+    the merged frame keeps IR Removal."""
+    ir_path = merged_ir_path(out_path)
+    folder = os.path.dirname(ir_path) or "."
+    tmp_path: Optional[str] = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=folder, delete=False, suffix=".part") as tmp:
+            tmp_path = tmp.name
+        u16 = np.round(np.clip(np.asarray(ir, dtype=np.float32), 0.0, 1.0) * 65535.0).astype(np.uint16)
+        tifffile.imwrite(tmp_path, u16, photometric="minisblack", compression="zlib", predictor=True)
+        os.replace(tmp_path, ir_path)
+        tmp_path = None
+    finally:
+        if tmp_path is not None and os.path.exists(tmp_path):
+            os.unlink(tmp_path)

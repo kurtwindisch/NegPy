@@ -1,4 +1,3 @@
-import os
 from collections.abc import Callable
 import imageio.v3 as iio
 import numpy as np
@@ -17,6 +16,7 @@ from negpy.infrastructure.loaders.helpers import (
     identify_color_space_from_icc,
     read_orientation,
 )
+from negpy.infrastructure.loaders.ir_companion import read_ir_companion
 from negpy.infrastructure.loaders.ir_planes import find_ir_plane, normalize_ir_to_float32
 from negpy.kernel.system.logging import get_logger
 
@@ -30,57 +30,9 @@ def _ir_suffixes(token: str) -> tuple[str, ...]:
     return tuple(token + e for e in sorted(SUPPORTED_TIFF_EXTENSIONS))
 
 
-def _find_sidecar(dirname: str, entries: list[str], stem_lower: str, suffixes: tuple[str, ...]) -> Optional[str]:
-    """First dir entry whose lowercased name == stem_lower + one of `suffixes` (suffixes already lowercase)."""
-    for name in entries:
-        if name.lower() in tuple(stem_lower + s for s in suffixes):
-            return os.path.join(dirname, name)
-    return None
-
-
 def _read_sidecar_ir(file_path: str) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-    """Read an IR sidecar and its optional validity mask fail-closed. Case-insensitive on the
-    _ir token and the .tif/.tiff extension so scanner tools that emit lowercase names are picked up."""
-    base, _ = os.path.splitext(file_path)
-    dirname = os.path.dirname(file_path) or "."
-    stem_lower = os.path.basename(base).lower()
-    try:
-        entries = os.listdir(dirname)
-    except OSError:
-        return None, None
-
-    candidate = _find_sidecar(dirname, entries, stem_lower, _ir_suffixes("_ir"))
-    if candidate is None:
-        return None, None
-    try:
-        arr = tifffile.imread(candidate)
-        ir = normalize_ir_to_float32(np.asarray(arr))
-    except Exception as e:
-        logger.warning(f"Failed to read IR sidecar {candidate}: {e}")
-        return None, None
-
-    mask_candidate = _find_sidecar(dirname, entries, stem_lower, _ir_suffixes("_ir_valid"))
-    if mask_candidate is None:
-        return ir, None
-    try:
-        valid = np.asarray(tifffile.imread(mask_candidate))
-        if valid.shape != ir.shape:
-            raise ValueError(f"mask shape {valid.shape} does not match IR shape {ir.shape}")
-        if valid.dtype not in (np.dtype(np.bool_), np.dtype(np.uint8)):
-            raise ValueError(f"mask dtype {valid.dtype} is not bool or uint8")
-        if valid.dtype == np.uint8:
-            rows_per_chunk = max(1, (1 << 20) // max(1, valid.shape[1]))
-            for start in range(0, valid.shape[0], rows_per_chunk):
-                chunk = valid[start : start + rows_per_chunk]
-                if not np.all((chunk == 0) | (chunk == 1) | (chunk == 255)):
-                    raise ValueError("uint8 mask values must be 0, 1, or 255")
-        valid = valid.astype(np.bool_, copy=False)
-        ir = ir.copy()
-        ir[~valid] = 1.0
-        return ir, valid
-    except Exception as e:
-        logger.warning(f"Failed to read IR validity mask {mask_candidate}; ignoring IR sidecar {candidate}: {e}")
-        return None, None
+    """The `_IR` companion beside this TIFF and its optional validity mask, fail-closed."""
+    return read_ir_companion(file_path)
 
 
 def _read_ir_from_extra_page(file_path: str, main_h: int, main_w: int) -> Optional[np.ndarray]:

@@ -47,6 +47,12 @@ class ScanlightSettings:
     white_process_mode: WhiteCaptureMode = WhiteCaptureMode.AUTO
     port: str = ""  # Scanlight serial port ("" = autodetect); the camera needs no address
     keep_light_on: bool = False  # re-light the framing light after each scan without Live View
+    capture_ir: bool = False  # shoot an IR frame after each scan, for IR dust removal (Big Scanlight)
+    ir_level: int = 0  # the active preset's IR exposure; 0 = none measured
+    shutter_ir: str = ""
+    # The last calibration's IR exposure: white-light presets are built in and never calibrated.
+    last_ir_level: int = 0
+    last_shutter_ir: str = ""
 
     def __post_init__(self) -> None:
         # A dict saved before the process-mode rename still carries the old names.

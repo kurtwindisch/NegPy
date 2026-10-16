@@ -48,16 +48,17 @@ def encode_packet(header: int, data: bytes = b"") -> bytes:
     return bytes([START_BYTE, header, len(data)]) + bytes(data)
 
 
-def encode_set_color(r: int, g: int, b: int, w: int = 0, save: bool = False) -> bytes:
+def encode_set_color(r: int, g: int, b: int, w: int = 0, ir: int = 0, save: bool = False) -> bytes:
     """Build a PKT_H2D_SET_COLOR packet.
 
-    IR byte is always 0 (ignored by v4 firmware). `save` writes the values to
-    NVM as power-on defaults — finite write cycles, so it must be opt-in.
+    Payload is `[r, g, b, w, ir, save]`; only the Big Scanlight has an IR LED, and
+    other bodies ignore that byte. `save` writes the values to NVM as power-on
+    defaults — finite write cycles, so it must be opt-in.
     """
-    for name, value in (("r", r), ("g", g), ("b", b), ("w", w)):
+    for name, value in (("r", r), ("g", g), ("b", b), ("w", w), ("ir", ir)):
         if not 0 <= value <= 255:
             raise ProtocolError(f"{name} channel out of range 0-255: {value}")
-    payload = bytes([r, g, b, w, 0, 1 if save else 0])
+    payload = bytes([r, g, b, w, ir, 1 if save else 0])
     return encode_packet(H2D_SET_COLOR, payload)
 
 
@@ -91,6 +92,9 @@ HARDWARE_NAMES = {0: "Big Scanlight", 1: "Scanlight v4a", 2: "Scanlight v2/v3", 
 # RGB-only, as is any id we do not recognise; a future white-capable model is added here.
 _WHITE_CAPABLE_HW = frozenset({0, 1, 3})
 
+# Models with an IR LED, for an IR dust-removal frame. Only the Big Scanlight has one.
+_IR_CAPABLE_HW = frozenset({0})
+
 
 def describe_hardware(hw_id: int) -> str:
     """Friendly device name for a reported hardware ID (from `decode_fw_version`),
@@ -103,3 +107,8 @@ def has_white_channel(hw_id: int) -> bool:
     any unrecognised id) return False, so the UI can drop the white slider/preset and light
     all three RGB channels for framing instead of a (non-existent) white one."""
     return hw_id in _WHITE_CAPABLE_HW
+
+
+def has_ir_channel(hw_id: int) -> bool:
+    """Whether this Scanlight model has an IR LED (the Big Scanlight only)."""
+    return hw_id in _IR_CAPABLE_HW

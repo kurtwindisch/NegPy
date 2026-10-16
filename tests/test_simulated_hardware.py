@@ -102,14 +102,14 @@ def test_each_frame_is_a_new_picture_that_triplet_grouping_tells_apart(tmp_path,
 
 def test_white_light_stills_advance_the_film_each_shot():
     sim = SimGphoto()
-    scanlight._color[:] = [0, 0, 0, 255]
+    scanlight._color[:] = [0, 0, 0, 255, 0]
     try:
         frames = []
         for _ in range(3):
             sim.still_dng()
             frames.append(sim._frame)
     finally:
-        scanlight._color[:] = [0, 0, 0, 0]
+        scanlight._color[:] = [0, 0, 0, 0, 0]
     assert frames == [1, 2, 3]
 
 
@@ -149,7 +149,7 @@ def test_scanlight_answers_and_reports_temperature(sim_env):
     light = Scanlight()
     try:
         assert light.port == "sim"
-        assert light.get_fw_version() == (7, 3)
+        assert light.get_fw_version() == (7, 0)  # the Big Scanlight, which has an IR LED
         light.set_color(10, 20, 30)
         deadline = time.monotonic() + 2
         while light.last_temp_c is None and time.monotonic() < deadline:

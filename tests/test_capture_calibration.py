@@ -241,7 +241,7 @@ class FakeLight:
         self.last = (0, 0, 0)
         self.history = []  # every color ever lit — lets tests prove an abort never reached G/B
 
-    def set_color(self, r=0, g=0, b=0, w=0, save=False):
+    def set_color(self, r=0, g=0, b=0, w=0, ir=0, save=False):
         self.last = (r, g, b)
         self.history.append((r, g, b))
 

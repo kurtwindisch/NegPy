@@ -9,6 +9,7 @@ import tifffile
 from PIL import Image
 
 from negpy.domain.interfaces import IImageLoader
+from negpy.infrastructure.loaders.ir_companion import read_ir_companion
 from negpy.infrastructure.loaders.helpers import (
     NonStandardFileWrapper,
     dng_bounded_preview,
@@ -562,12 +563,19 @@ class RawpyLoader(IImageLoader):
                 raw.close()
                 raise InterruptedError("preview load cancelled")
 
+        ir = _peek_hdri_ir_page(file_path)
+        ir_companion = False
+        if ir is None:
+            ir, _valid = read_ir_companion(file_path)
+            ir_companion = ir is not None
         metadata = {
             "orientation": read_orientation(file_path),
             "raw_flip": 0,
             # Decoded output_color=raw, so the file's own tags characterise nothing here.
             "color_space": None,
-            "ir": _peek_hdri_ir_page(file_path),
+            "ir": ir,
+            # A camera IR frame decodes at half size; the decode scales it to the main buffer.
+            "ir_companion": ir_companion,
         }
 
         metadata["lens_correction"] = bind_decode(read_lens_metadata(file_path), raw)

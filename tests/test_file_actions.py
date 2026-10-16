@@ -122,6 +122,18 @@ def test_trashing_moves_sidecars_and_unloads_only_what_moved(tmp_path, monkeypat
     assert ctrl.set_status.call_args.kwargs["kind"] == "warning"
 
 
+def test_trashing_takes_the_ir_companions_along(tmp_path, monkeypatch):
+    path = _file(tmp_path, "Roll_Frame001.ARW")
+    companions = [_file(tmp_path, "Roll_Frame001_IR.ARW"), _file(tmp_path, "Roll_Frame001_IR_VALID.tif")]
+    unrelated = _file(tmp_path, "Roll_Frame0011_IR.ARW")
+    trashed: list = []
+    monkeypatch.setattr("negpy.desktop.controller.move_to_trash", lambda p: trashed.append(p) or "")
+    ctrl = MagicMock()
+    ctrl.state.uploaded_files = [{"path": path}]
+    AppController.move_frames_to_trash(ctrl, [0])
+    assert sorted(trashed) == sorted([path, *companions]) and unrelated not in trashed
+
+
 def test_a_sidecar_the_trash_refuses_is_reported(tmp_path, monkeypatch):
     path = _file(tmp_path)
     sidecar = sidecar_path_for(path)

@@ -18,7 +18,7 @@ class FakeLight:
         self.colors = []
         self.off_called = False
 
-    def set_color(self, r=0, g=0, b=0, w=0, save=False):
+    def set_color(self, r=0, g=0, b=0, w=0, ir=0, save=False):
         self.colors.append((r, g, b, w))
 
     def off(self):

@@ -28,7 +28,7 @@ from negpy.kernel.system.override import effective_max_texture_size
 from negpy.features.flatfield.logic import apply_flatfield, flatfield_token
 from negpy.features.flatfield.models import FlatFieldConfig
 from negpy.features.lens.models import LensCorrections
-from negpy.services.rendering.lens import lens_decode_token, prepare_lens_source
+from negpy.services.rendering.lens import lens_decode_token, prepare_lens_ir, prepare_lens_source, source_ir
 from negpy.features.retouch.logic import downsample_ir
 from negpy.features.hdr.logic import apply_render_exposure, merge_providers, resolve_anchor
 from negpy.features.hdr.models import HdrConfig, hdr_merge_token
@@ -419,14 +419,13 @@ class PreviewManager:
         # Bake EXIF orientation into the buffer (postprocess runs with user_flip=0).
         orientation = metadata.get("orientation", 1)
         full_linear = apply_exif_orientation(uint16_to_float32(np.ascontiguousarray(rgb)), orientation)
+        ir_full = source_ir(metadata, full_linear.shape)
         if lens_corrections:
             full_linear = prepare_lens_source(full_linear, metadata, lens_flatfield, lens_corrections)
+            ir_full = prepare_lens_ir(ir_full, metadata, lens_corrections)
         del rgb  # release the uint16 decode buffer before the resize/copy peak
         if should_cancel is not None and should_cancel():
             raise InterruptedError("preview load cancelled")
-        ir_full = metadata.get("ir")
-        if ir_full is not None:
-            ir_full = apply_exif_orientation(ir_full, orientation)
 
         h_p, w_p = full_linear.shape[:2]
         # Use the pre-postprocess dims when valid, else fall back to the buffer shape.
@@ -496,10 +495,8 @@ class PreviewManager:
 
         # The IR channel travels with the preview, so resize it to the final preview dims.
         # Min-preserving, not INTER_AREA: this is the only place the full-res IR exists, so a
-        # sub-pixel hair's dip must survive *here* or dust detection never sees it. The dims
-        # equality holds for every IR source, because libraw ignores half_size on stacked
-        # LinearRaw and the other IR carriers are excluded from fast decode. A plane that does
-        # mismatch belongs to another frame and is dropped, not scaled.
+        # sub-pixel hair's dip must survive *here* or dust detection never sees it. `source_ir`
+        # already put the plane at the decoded buffer's size, or dropped it.
         if ir_full is not None and ir_full.shape[:2] == (h_p, w_p):
             ph, pw = preview_raw.shape[:2]
             if (ph, pw) != ir_full.shape[:2]:

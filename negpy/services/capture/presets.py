@@ -44,6 +44,8 @@ class ScanlightPreset:
     aperture: str = ""  # aperture label (e.g. "f/8"); "" for a manual lens (no electronic aperture)
     single_capture: bool = False  # one exposure with R, G and B lit together, not a triplet
     sensor_profile: str = ""  # sensor profile measured with a single-capture preset; "" = none
+    ir_level: int = 0  # IR LED level for the IR frame; 0 = not calibrated for IR
+    shutter_ir: str = ""
 
 
 class PresetStore:

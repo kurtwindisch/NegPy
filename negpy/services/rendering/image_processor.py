@@ -40,7 +40,13 @@ from negpy.features.exposure.analysis import COLOR_HIST_BINS
 from negpy.features.exposure.models import RenderIntent
 from negpy.features.flatfield.logic import apply_flatfield, flatfield_token
 from negpy.features.lab.logic import apply_resize_sharpening
-from negpy.services.rendering.lens import flatfield_source, lens_decode_token, metadata_lens_corrections, prepare_lens_source
+from negpy.services.rendering.lens import (
+    flatfield_source,
+    lens_decode_token,
+    metadata_lens_corrections,
+    prepare_lens_ir,
+    prepare_lens_source,
+)
 from negpy.features.geometry.logic import autocrop_detection_key, resolve_autocrop_rect
 from negpy.features.geometry.models import squares_on_arm
 from negpy.features.geometry.skew import squared_geometry
@@ -1206,22 +1212,22 @@ class ImageProcessor:
             f32_buffer = uint16_to_float32(rgb)
 
         if ir_full is not None and ir_full.shape[:2] != f32_buffer.shape[:2]:
-            # Defensive: no current IR carrier half-sizes, but a mismatched plane must be
-            # rescaled or the IR bake skips it. Routed through downsample_ir, not
+            # A camera IR frame decodes at half size. Routed through downsample_ir, not
             # INTER_AREA, so a sub-pixel hair keeps its dip.
             ih, iw = f32_buffer.shape[:2]
             ir_full = downsample_ir(ir_full, max(ih, iw), dims=(iw, ih))
 
         orientation = metadata.get("orientation", 1)
         f32_buffer = apply_exif_orientation(f32_buffer, orientation)
+        if ir_full is not None:
+            ir_full = apply_exif_orientation(ir_full, orientation)
         if metadata_lens_corrections(params):
             f32_buffer = prepare_lens_source(f32_buffer, metadata, params.flatfield, metadata_lens_corrections(params))
+            ir_full = prepare_lens_ir(ir_full, metadata, metadata_lens_corrections(params))
         else:
             f32_buffer = apply_flatfield(f32_buffer, params.flatfield, orientation=orientation)
         if unmix and not is_triplet:
             f32_buffer = apply_sensor_correction(f32_buffer, effective_sensor_matrix(params.process), params.process.sensor_unmix)
-        if ir_full is not None:
-            ir_full = apply_exif_orientation(ir_full, orientation)
         return f32_buffer, ir_full, source_cs
 
     def camera_wb_for(self, file_path: str) -> Optional[Sequence[float]]:

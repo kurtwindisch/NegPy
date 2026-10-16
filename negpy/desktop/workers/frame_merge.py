@@ -8,7 +8,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
 from negpy.domain.models import TiffCompression, WorkspaceConfig
 from negpy.kernel.image.logic import calculate_file_hash
-from negpy.services.export.frame_merge import MergeCancelled, decode_params, write_merged_frame
+from negpy.services.export.frame_merge import MergeCancelled, decode_params, write_merged_frame, write_merged_ir
 from negpy.services.rendering.image_processor import ImageProcessor
 
 
@@ -65,12 +65,14 @@ class FrameMergeWorker(QObject):
                 try:
                     # _load_source_f32, not _decode_oriented_f32: only it assembles a stitch.
                     params = decode_params(task.params, task.kind)
-                    f32, _ir, _cs = self._processor._load_source_f32(task.asset["path"], params)
+                    f32, ir, _cs = self._processor._load_source_f32(task.asset["path"], params)
                     # The decode cannot stop, so an Abort during it is honored here, before any write.
                     if self._cancel.is_set():
                         raise MergeCancelled(os.path.basename(task.out_path))
                     write_merged_frame(f32, task.asset["path"], task.out_path, params, task.compression, self._cancel.is_set)
-                    del f32
+                    if ir is not None and ir.shape[:2] == f32.shape[:2]:
+                        write_merged_ir(ir, task.out_path)
+                    del f32, ir
                     new_hash = calculate_file_hash(task.out_path)
                     if new_hash.startswith("err_"):
                         raise OSError(f"Could not read {os.path.basename(task.out_path)} back")

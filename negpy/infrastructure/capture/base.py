@@ -35,7 +35,7 @@ CAPTURE_ORDER: tuple[Channel, Channel, Channel] = (Channel.RED, Channel.GREEN, C
 class LightSource(Protocol):
     """Minimal Scanlight interface the capture service depends on."""
 
-    def set_color(self, r: int = 0, g: int = 0, b: int = 0, w: int = 0, save: bool = False) -> None: ...
+    def set_color(self, r: int = 0, g: int = 0, b: int = 0, w: int = 0, ir: int = 0, save: bool = False) -> None: ...
 
     def off(self) -> None: ...
 
@@ -49,6 +49,15 @@ class Camera(Protocol):
     def capture(self, out_path: str, shutter: Optional[str] = None, iso: Optional[str] = None, aperture: Optional[str] = None) -> str: ...
 
     def close(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class IrExposure:
+    """The IR frame shot after a frame's color exposures, for IR dust removal. IR is lit alone;
+    `shutter` None leaves the camera as set."""
+
+    level: int
+    shutter: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -75,16 +84,19 @@ class CaptureSettings:
     # triplet passes the preset's values; white-light and normal scans leave them free.
     iso: Optional[str] = None
     aperture: Optional[str] = None
+    ir: Optional[IrExposure] = None
 
 
 @dataclass(frozen=True)
 class CaptureResult:
-    """The three RAW files written for one frame (red is the primary asset)."""
+    """The three RAW files written for one frame (red is the primary asset), and the IR
+    companion when one was shot. `paths` holds the color files only."""
 
     frame_number: int
     red_path: str
     green_path: str
     blue_path: str
+    ir_path: Optional[str] = None
 
     @property
     def paths(self) -> list[str]:

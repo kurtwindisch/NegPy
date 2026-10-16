@@ -33,7 +33,7 @@ from negpy.desktop.view.widgets.floating_panel import float_over_app
 #: Progress-bar chunk color per triplet channel. The live view freezes during a triplet,
 #: because the capture now holds the camera without gaps, so the bar carries the R to G
 #: to B switch the preview frames used to show. Muted tones, readable on the dark theme.
-_CHANNEL_COLORS = {"R": THEME.channel_red_text, "G": THEME.channel_green_text, "B": THEME.channel_blue_text}
+_CHANNEL_COLORS = {"R": THEME.channel_red_text, "G": THEME.channel_green_text, "B": THEME.channel_blue_text, "IR": THEME.text_secondary}
 _DONE_COLOR = THEME.status_success
 _FLASH_MS = 1500
 _FOCUS_AT_PEAK = 0.99

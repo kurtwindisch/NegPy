@@ -1177,7 +1177,7 @@ def test_normal_mode_keeps_the_scan_live_view_steppers():
     assert not w.lv_window.settings_widget.isHidden()
 
 
-def _calibrate(w, monkeypatch, name="Portra 400", single_capture=False, sensor_matrix=None):
+def _calibrate(w, monkeypatch, name="Portra 400", single_capture=False, sensor_matrix=None, ir=None):
     """Drive _on_calibration_finished as the worker would (a result exists only when every channel
     hit target — anything else arrives via _on_calibration_exposure). Returns the baked preset."""
     import types
@@ -1189,7 +1189,7 @@ def _calibrate(w, monkeypatch, name="Portra 400", single_capture=False, sensor_m
     w._calibrating_preset = name
     w._on_calibration_finished(
         types.SimpleNamespace(
-            levels=(200, 180, 90), shutters=("1/5", "1/5", "1/5"), single_capture=single_capture, sensor_matrix=sensor_matrix
+            levels=(200, 180, 90), shutters=("1/5", "1/5", "1/5"), single_capture=single_capture, sensor_matrix=sensor_matrix, ir=ir
         )
     )
     return saved["preset"]

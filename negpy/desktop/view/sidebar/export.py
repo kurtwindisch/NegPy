@@ -611,7 +611,7 @@ class ExportSidebar(BaseSidebar):
         config = self.state.config
         geometry = config.geometry
         requested = replace(config, geometry=replace(geometry, lens_distortion_from_metadata=True, lens_ca_from_metadata=True))
-        single = bool(path) and is_camera and not self.state.has_ir and bool(metadata_lens_corrections(requested))
+        single = bool(path) and is_camera and bool(metadata_lens_corrections(requested))
         embedded = read_lens_metadata(path) if single else LensMetadata()
         on = metadata_lens_corrections(config)
         embedded_on = on.distortion and embedded.distortion or on.ca and embedded.ca

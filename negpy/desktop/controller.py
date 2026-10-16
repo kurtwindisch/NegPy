@@ -214,6 +214,7 @@ from negpy.features.toning.models import ToningConfig
 from negpy.infrastructure.capture.settings import WhiteCaptureMode
 from negpy.infrastructure.display.color_spaces import ColorSpaceRegistry
 from negpy.infrastructure.filesystem.watcher import FolderWatchService
+from negpy.infrastructure.loaders.ir_companion import ir_companion_paths
 from negpy.infrastructure.gpu.device import GPUDevice
 from negpy.infrastructure.gpu.resources import GPUTexture
 from negpy.infrastructure.storage.local_asset_store import LocalAssetStore
@@ -6137,10 +6138,10 @@ class AppController(QObject):
                 errors.append(error)
                 logger.warning("Move to Trash could not move %s: %s", path, error)
                 continue
-            sidecar = sidecar_path_for(path)
-            if os.path.exists(sidecar) and (error := move_to_trash(sidecar)):
-                errors.append(error)
-                logger.warning("Move to Trash could not move the sidecar %s: %s", sidecar, error)
+            for sidecar in (sidecar_path_for(path), *ir_companion_paths(path)):
+                if os.path.exists(sidecar) and (error := move_to_trash(sidecar)):
+                    errors.append(error)
+                    logger.warning("Move to Trash could not move the sidecar %s: %s", sidecar, error)
             trashed.append(i)
         self.session.remove_files(trashed)
         if errors:
@@ -6249,7 +6250,8 @@ class AppController(QObject):
             if primary in index_by_path:
                 replacements[index_by_path[primary]] = new_asset
             if self._frame_merge_trash:
-                for path in (primary, *parts, *sidecars):
+                companions = [c for p in (primary, *parts) for c in ir_companion_paths(p)]
+                for path in (primary, *parts, *sidecars, *companions):
                     if os.path.exists(path) and (error := move_to_trash(path)):
                         kept += 1
                         logger.warning("Merge to TIFF Negative could not move %s to the Trash: %s", path, error)

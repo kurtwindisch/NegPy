@@ -1,6 +1,7 @@
 """A python-gphoto2 stand-in: one body that exposes the simulated film under the simulated Scanlight.
 
-A still lit white or by the triplet's first channel advances the film; the other two channels stay on it.
+A still lit white or by the triplet's first channel advances the film; the other two channels and an IR
+still stay on it.
 """
 
 import functools
@@ -13,7 +14,7 @@ import tifffile
 
 from negpy.infrastructure.capture.base import CAPTURE_ORDER
 from negpy.infrastructure.simulated.images import film
-from negpy.infrastructure.simulated.scanlight import current_color
+from negpy.infrastructure.simulated.scanlight import current_color, current_ir
 
 MODEL = "Simulated Camera"
 _SENSOR_HW = (2000, 3000)  # a smaller frame fails the capture path's minimum RAW size
@@ -22,6 +23,8 @@ _BLACK, _WHITE = 512, 16383
 # Clear-base signal per LED count per second at ISO 100, as a fraction of full scale.
 # The calibration's reference start point must land below target.
 _RESPONSE = np.array([0.012, 0.055, 0.13], np.float32)
+# An IR-converted body: every sensor channel records the IR LED.
+_IR_RESPONSE = np.array([0.012, 0.011, 0.010], np.float32)
 _CROSSTALK = 0.03
 _WHITE_SHARE = 0.5
 _SHUTTERS = (
@@ -186,23 +189,28 @@ class SimGphoto:
         self.Camera = lambda: _Camera(self)
         self.Camera.autodetect = lambda: _CameraList([(MODEL, "usb:sim")])
 
-    def _signal(self, transmittance: np.ndarray) -> np.ndarray:
-        """Each sensor channel's exposure, as a fraction of full scale, through `transmittance`."""
-        r, g, b, w = current_color()
-        led = np.array([r, g, b], np.float32)
-        lit = led + _CROSSTALK * (led.sum() - led) + _WHITE_SHARE * w
+    def _signal(self, h: int, w: int) -> np.ndarray:
+        """Each sensor channel's exposure, as a fraction of full scale, through the current film frame."""
+        r, g, b, white = current_color()
         iso = self.props["iso"].value or ""
         gain = _seconds(self.props["shutterspeed"].value or "1") * (int(iso) / 100 if iso.isdigit() else 1.0)
-        return transmittance * (_RESPONSE * lit * gain)
+        ir = current_ir()
+        if ir and not (r or g or b or white):
+            return _film_ir(h, w, self._frame)[..., None] * (_IR_RESPONSE * ir * gain)
+        led = np.array([r, g, b], np.float32)
+        lit = led + _CROSSTALK * (led.sum() - led) + _WHITE_SHARE * white
+        return _film(h, w, self._frame) * (_RESPONSE * lit * gain)
 
     def _advance_film(self) -> None:
         r, g, b, w = current_color()
+        if not (r or g or b or w):
+            return
         if w > max(r, g, b) or int(np.argmax((r, g, b))) == _FIRST_CHANNEL:
             self._frame += 1
 
     def still_dng(self) -> bytes:
         self._advance_film()
-        quad = self._signal(_film(_SENSOR_HW[0] // 2, _SENSOR_HW[1] // 2, self._frame))
+        quad = self._signal(_SENSOR_HW[0] // 2, _SENSOR_HW[1] // 2)
         cfa = np.empty(_SENSOR_HW, np.float32)
         cfa[0::2, 0::2], cfa[0::2, 1::2], cfa[1::2, 0::2], cfa[1::2, 1::2] = quad[..., 0], quad[..., 1], quad[..., 1], quad[..., 2]
         counts = cfa * (_WHITE - _BLACK)
@@ -213,7 +221,7 @@ class SimGphoto:
         return out.getvalue()
 
     def preview_jpeg(self) -> bytes:
-        display = np.clip(self._signal(_film(*_PREVIEW_HW, self._frame)), 0.0, 1.0) ** (1 / 2.2)
+        display = np.clip(self._signal(*_PREVIEW_HW), 0.0, 1.0) ** (1 / 2.2)
         _ok, jpeg = cv2.imencode(".jpg", cv2.cvtColor((display * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
         return jpeg.tobytes()
 
@@ -221,6 +229,11 @@ class SimGphoto:
 @functools.lru_cache(maxsize=4)
 def _film(h: int, w: int, seed: int) -> np.ndarray:
     return film(h, w, seed, _FILM_SHAPES)[0]
+
+
+@functools.lru_cache(maxsize=4)
+def _film_ir(h: int, w: int, seed: int) -> np.ndarray:
+    return film(h, w, seed, _FILM_SHAPES)[1]
 
 
 @functools.cache

@@ -439,6 +439,8 @@ def _decode_source(
     if _is_camera_raw(file_path):
         if rgbscan is not None and is_rgb_triplet(rgbscan):
             rgb, ir, wb, meta = _decode_camera_raw_triplet(file_path, rgbscan, demosaic)
+            if ir is None:
+                ir = _companion_ir(file_path, rgb.shape)
             if apply_flatfield and flatfield is not None:
                 rgb = _apply_flatfield_correction(rgb, flatfield, orientation=read_orientation(file_path))
             if apply_wb and not wb_blocked and wb is not None:
@@ -446,11 +448,14 @@ def _decode_source(
             return rgb, ir, wb, meta
         meta = _read_source_meta_tiff(file_path)
         rgb, wb, decode_meta, lens_meta = _decode_camera_raw_buffer(file_path, demosaic)
+        ir = _companion_ir(file_path, rgb.shape)
         if apply_flatfield and flatfield is not None:
             rgb = _apply_flatfield_correction(rgb, flatfield, orientation=read_orientation(file_path))
         warped = bool(lens.distortion and lens_meta.distortion or lens.ca and lens_meta.ca)
         if warped:
             rgb = apply_lens(rgb, lens_meta, read_orientation(file_path), lens)
+            if ir is not None:
+                ir = apply_lens(ir, lens_meta, read_orientation(file_path), lens)
         merged = _SourceMeta(
             make=meta.make or decode_meta.make,
             model=meta.model or decode_meta.model,
@@ -462,7 +467,7 @@ def _decode_source(
             rgb = apply_sensor_correction(rgb, process.sensor_matrix, process.sensor_unmix)
         if apply_wb and not wb_blocked and wb is not None:
             rgb = _apply_white_balance(rgb, wb)
-        return rgb, None, wb, merged
+        return rgb, ir, wb, merged
     if _is_tiff(file_path):
         meta = _read_source_meta_tiff(file_path)
         rgb, ir = _decode_tiff(file_path, gamma_key=gamma_key, expansion=expansion)
@@ -497,6 +502,19 @@ def _pakon_spec_desc(file_path: str) -> str:
         return f"{header[1]}x{header[0]}" if header else "Unknown"
     except OSError:
         return "Unknown"
+
+
+def _companion_ir(file_path: str, shape: tuple[int, ...]) -> Optional[np.ndarray]:
+    """A camera scan's `_IR` companion, oriented and at the oriented decode's `shape`."""
+    from negpy.features.retouch.logic import downsample_ir
+    from negpy.infrastructure.loaders.ir_companion import read_ir_companion
+
+    ir, _valid = read_ir_companion(file_path)
+    if ir is None:
+        return None
+    ir = apply_exif_orientation(ir, read_orientation(file_path))
+    h, w = shape[:2]
+    return ir if ir.shape[:2] == (h, w) else downsample_ir(ir, max(h, w), dims=(w, h))
 
 
 def _decode_tiff(

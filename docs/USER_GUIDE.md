@@ -583,7 +583,7 @@ Spotting, as with a brush on a finished print. Marks are found by local contrast
 *   **Method**: how the film under a defect is rebuilt.
     *   **NegPy** (default): divides semi-transparent dust back out and fills opaque cores from the clean film around them.
     *   **OpenICE**: keeps picture detail under a speck and gives solid defects synthetic grain. Better on fine detail but less proven across scanners: compare both on a frame you know.
-*   IR is read from 4-channel TIFFs and DNGs (VueScan, NegPy's scans), SilverFast iSRD TIFFs, 64-bit **HDRi RAW DNGs** and `_IR.tif` sidecars. B&W and Kodachrome frames are skipped, as they block infrared like dust.
+*   IR is read from 4-channel TIFFs and DNGs (VueScan, NegPy's scans), SilverFast iSRD TIFFs, 64-bit **HDRi RAW DNGs**, `_IR.tif` sidecars and a camera scan's **Capture IR** frame. B&W and Kodachrome frames are skipped, as they block infrared like dust.
 
 **Manual Heal**. The brush marks a search area, not a stamp: only pixels that stand out from the film around them are rewritten, so paint generously.
 
@@ -1112,6 +1112,7 @@ Shown while a Scanlight is connected.
 *   **Create Sensor Profile** (Single Capture only, default on): also saves a sensor profile under the preset's name; a roll scanned with the preset takes it and turns Linear RAW on. Other rolls do not get it.
 *   **ISO**, **Shutter**, **Aperture**: the preset's exposure, editable while you build a manual preset.
 *   **Channel Delay** (0 to 5000 ms): pauses between R, G and B for bodies that lock up. Triplet presets only.
+*   **Capture IR** (Big Scanlight only, off by default): for an IR-converted camera only; an IR-cut filter blocks the IR LED. Calibration then also measures the **IR** level (0 to 255) and **IR shutter** on the clear base; when it cannot, the color preset is saved without them and the status line says why. Each scan then shoots one frame lit by the IR LED alone and saves it beside the scan as `<frame>_IR` (`<frame>_R_IR` for a triplet), for **IR Removal** in Retouch. A preset with no IR exposure scans without the IR frame; a white-light preset uses the last calibration's. Move to Trash takes the IR frame along.
 
 <!-- panel:scan_output -->
 ### Output

@@ -78,8 +78,6 @@ class LensSidebar(BaseSidebar):
         requested = replace(config, geometry=replace(config.geometry, lens_distortion_from_metadata=True, lens_ca_from_metadata=True))
         if not metadata_lens_corrections(requested):
             lens = LensMetadata(reason="Embedded lens correction is unavailable for composites.")
-        if self.state.has_ir:
-            lens = LensMetadata(reason="Embedded lens correction is unavailable for RGB+IR sources.")
         for button, enabled, available in (
             (self.metadata_distortion_btn, config.geometry.lens_distortion_from_metadata, lens.distortion),
             (self.metadata_ca_btn, config.geometry.lens_ca_from_metadata, lens.ca),

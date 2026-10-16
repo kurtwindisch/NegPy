@@ -65,7 +65,13 @@ from negpy.services.capture.calibration import (
 from negpy.services.assets.sensor import SensorProfiles
 from negpy.services.capture.presets import PresetStore, ScanlightPreset, framing_levels
 
-_CHANNEL_COLORS = {"R": THEME.channel_red_text, "G": THEME.channel_green_text, "B": THEME.channel_blue_text, "W": THEME.text_secondary}
+_CHANNEL_COLORS = {
+    "R": THEME.channel_red_text,
+    "G": THEME.channel_green_text,
+    "B": THEME.channel_blue_text,
+    "W": THEME.text_secondary,
+    "IR": THEME.text_secondary,
+}
 
 # One source for the over/under advice, shown on both surfaces of an aborted calibration:
 # the calibration window's status line and the pop-up.
@@ -182,6 +188,7 @@ class ScanlightSidebar(QWidget):
         self._focus_settle_timer.timeout.connect(self._reset_focus_meter)
         self._settings_loaded = False  # have the live camera-setting dropdowns been populated yet?
         self._light_has_white = True  # does the connected Scanlight have a white LED? (False = v1-v3, RGB-only)
+        self._light_has_ir = False  # does the connected Scanlight have an IR LED? (the Big Scanlight only)
         # Advertised camera abilities (issue #621). Optimistic until a body has been opened:
         # an unlisted body matches the generic PTP entry that claims everything, so only a
         # *missing* bit is evidence. Never grey a control out on an uninspected camera.
@@ -354,6 +361,12 @@ class ScanlightSidebar(QWidget):
         self.w_slider.setToolTip("White LED — used only by the white-light preset; the Scanlight can't light it together with RGB")
         for slider in (self.r_slider, self.g_slider, self.b_slider, self.w_slider):
             rgb.addWidget(slider)
+        # IR is never part of the framing light, so it does not push to the light as it moves.
+        self.ir_slider = CompactSlider("IR", 0, 255, 0, step=1, precision=1, color=_CHANNEL_COLORS["IR"])
+        self.ir_slider.setValue(self._settings.ir_level)
+        self.ir_slider.setToolTip("IR LED level for the IR frame shot after each scan, for IR dust removal")
+        self.ir_slider.setVisible(False)
+        rgb.addWidget(self.ir_slider)
         self.off_btn = labeled_action("fa5s.power-off", " Light Off", "Turn all Scanlight channels off")
         rgb.addWidget(self.off_btn)
 
@@ -383,6 +396,15 @@ class ScanlightSidebar(QWidget):
             _stepper.setToolTip("Locked to the preset — pick “Create a manual preset” to set it by hand.")
             _stepper.activated.connect(lambda _i, w=_which, s=_stepper: self._on_sidebar_exposure_changed(w, s))
             _exp.addLayout(field_row(_tag_text, _stepper))
+        # The IR frame's shutter is stored, not written to the body: the scan sets it for the IR shot.
+        self.ir_shutter_stepper = SettingStepper()
+        self.ir_shutter_stepper.setEnabled(False)
+        self._ir_shutter_row = QWidget()
+        _ir_row = field_row("IR shutter", self.ir_shutter_stepper)
+        _ir_row.setContentsMargins(0, 0, 0, 0)
+        self._ir_shutter_row.setLayout(_ir_row)
+        self._ir_shutter_row.setVisible(False)
+        _exp.addWidget(self._ir_shutter_row)
         rgb.addWidget(self._exposure_widget)
         self.inter_exposure_delay_slider = CompactSlider("Channel Delay", 0, 5000, 0, step=100, precision=1, unit=" ms")
         self.inter_exposure_delay_slider.setValue(self._settings.inter_exposure_delay_ms)
@@ -390,6 +412,18 @@ class ScanlightSidebar(QWidget):
             "Wait this long between successive trichrome channel exposures so the camera can flush the previous shot."
         )
         rgb.addWidget(self.inter_exposure_delay_slider)
+        self.capture_ir_btn = labeled_toggle(
+            "fa5s.broom",
+            " Capture IR",
+            self._settings.capture_ir,
+            "Turn on only for an IR-converted camera: an IR-cut filter blocks the IR LED. "
+            "Calibration then also measures the IR exposure, and each scan adds an IR frame for IR Removal in Retouch",
+        )
+        self.capture_ir_btn.setVisible(False)
+        rgb.addWidget(self.capture_ir_btn)
+        self._ir_hint = hint_label("")
+        self._ir_hint.setVisible(False)
+        rgb.addWidget(self._ir_hint)
         layout.addWidget(self.light_body)
 
         self.footer = QWidget()
@@ -440,6 +474,9 @@ class ScanlightSidebar(QWidget):
         # Typing an invalid path greys Scan immediately (with the reason), not on the next click.
         self.output.changed.connect(self._apply_gating)
         self.inter_exposure_delay_slider.valueChanged.connect(self._update_settings_from_ui)
+        self.ir_slider.valueChanged.connect(self._update_settings_from_ui)
+        self.ir_shutter_stepper.activated.connect(lambda _i: self._update_settings_from_ui())
+        self.capture_ir_btn.toggled.connect(lambda _on: self._update_settings_from_ui())
 
         self.controller.capture_light_set.connect(self._on_light_set)
         self.controller.capture_progress.connect(self._on_progress)
@@ -595,7 +632,17 @@ class ScanlightSidebar(QWidget):
             shutter_w=preset.shutter_r,
         )
         self._apply_preset_exposure(preset.iso, preset.aperture)  # a scan forces these on the body
+        self._apply_ir_exposure(preset.ir_level, preset.shutter_ir)
         self._apply_preset_camera_settings(preset)  # and reflect them in the live view now
+
+    def _apply_ir_exposure(self, level: int, shutter: str) -> None:
+        """Point the IR frame's exposure (settings + the read-only IR slider and stepper) at a
+        preset's values; level 0 means none was measured."""
+        self._settings = replace(self._settings, ir_level=level, shutter_ir=shutter)
+        self.ir_slider.blockSignals(True)
+        self.ir_slider.setValue(level)
+        self.ir_slider.blockSignals(False)
+        self._show_lone(self.ir_shutter_stepper, shutter)
 
     def _set_manual_mode(self, on: bool) -> None:
         """Enter/leave manual-preset mode. On: unlock the sliders + exposure steppers and Save, and
@@ -639,6 +686,7 @@ class ScanlightSidebar(QWidget):
             self._set_manual_mode(False)  # picking a real preset (or nothing) leaves manual mode
         if not name:
             self._apply_preset_exposure("", "")  # no preset → the camera exposure is free again
+            self._apply_ir_exposure(0, "")
             self._refresh_preset_hint()  # deselected → clear the note
             self._apply_gating()
             return
@@ -649,10 +697,12 @@ class ScanlightSidebar(QWidget):
                 self._set_slider(slider, value)
             self._show_lone(self.shutter_stepper, "")
             self._apply_preset_exposure("", "")  # white-light doesn't lock exposure — the steppers do
+            self._apply_ir_exposure(self._settings.last_ir_level, self._settings.last_shutter_ir)
         else:
             preset = self._presets.get(name)
             if preset is None:
                 self._apply_preset_exposure("", "")
+                self._apply_ir_exposure(0, "")
                 self._refresh_preset_hint()
                 self._apply_gating()
                 return
@@ -710,6 +760,8 @@ class ScanlightSidebar(QWidget):
                 aperture=s.aperture,
                 single_capture=s.single_capture,
                 sensor_profile=sensor_profile,
+                ir_level=s.ir_level,
+                shutter_ir=s.shutter_ir,
             ),
         )
         self._reload_presets(select=name)
@@ -871,6 +923,7 @@ class ScanlightSidebar(QWidget):
                 start_levels=start_levels,
                 start_shutter=start_shutter,
                 single_capture=self.calib_window.capture_btn.currentIndex() == 1,
+                calibrate_ir=self._light_has_ir and s.capture_ir,
             )
         )
 
@@ -1346,6 +1399,7 @@ class ScanlightSidebar(QWidget):
             steppers["iso"].append(self.iso_stepper)
             steppers["shutter"].append(self.shutter_stepper)
             steppers["aperture"].append(self.aperture_stepper)
+            steppers["shutter"].append(self.ir_shutter_stepper)
         for key, group in steppers.items():
             info = data.get(key)
             for stepper in group:
@@ -1413,6 +1467,14 @@ class ScanlightSidebar(QWidget):
         # The body sits at the metered ISO/aperture, so capture them: the preset bakes them and
         # later forces them, and the fields show them read-only.
         self._apply_preset_exposure(self._current_setting_label("iso"), self._current_setting_label("aperture", require_writable=True))
+        ir_note = ""
+        if result.ir is not None:
+            self._apply_ir_exposure(result.ir.level, result.ir.shutter)
+            self._settings = replace(self._settings, last_ir_level=result.ir.level, last_shutter_ir=result.ir.shutter)
+        else:
+            self._apply_ir_exposure(0, "")
+            if getattr(result, "ir_error", ""):
+                ir_note = f", with no IR exposure: {result.ir_error}"
         self._update_settings_from_ui()
         self._save_settings()
         # A finished run is on target on every channel, since anything else aborts via
@@ -1437,7 +1499,7 @@ class ScanlightSidebar(QWidget):
             # Pinned: the slider writes above armed the light debounce, whose light_set echo lands
             # right after this line. Without the pin it replaced this outcome before anyone could
             # read it.
-            self._set_status(f"Saved preset “{name}”{profile_note}", pinned=True)
+            self._set_status(f"Saved preset “{name}”{profile_note}{ir_note}", pinned=True)
         self._stop_calibration_live_view()  # calibration ran inside live view → tear it down
 
     @pyqtSlot(str)
@@ -1575,6 +1637,8 @@ class ScanlightSidebar(QWidget):
             as_roll=self.output.as_roll(),
             single_capture=single,
             sensor_profile=preset.sensor_profile if preset is not None else "",
+            ir_level=s.ir_level if self._ir_capture_ready() else 0,
+            shutter_ir=s.shutter_ir,
         )
         self.set_scanning(True)
         if rgb and not req.white_mode and not single:
@@ -1681,6 +1745,7 @@ class ScanlightSidebar(QWidget):
         self._set_conn_status(self.light_status, status["light_ok"], "Light", f"Scanlight: {status['light_detail']}")
         self._light_verified = status["light_ok"]
         self._light_has_white = status.get("light_has_white", True)  # RGB-only Scanlights (v1-v3) have no white LED
+        self._light_has_ir = bool(status.get("light_has_ir", False))
         self._camera_has_preview = bool(status.get("camera_preview", True))
         self._camera_has_config = bool(status.get("camera_config", True))
         # An RGB triplet must write shutter/ISO/aperture onto the body. A camera whose driver
@@ -1842,6 +1907,14 @@ class ScanlightSidebar(QWidget):
         for stepper in (self.iso_stepper, self.shutter_stepper, self.aperture_stepper):
             stepper.setEnabled(editable)
             stepper.setToolTip(tip)
+        self.ir_slider.setEnabled(editable)
+        self.ir_shutter_stepper.setEnabled(editable)
+        self.ir_shutter_stepper.setToolTip(
+            "The IR frame's shutter, set for this preset."
+            if editable
+            else "Locked to the preset — pick “Create a manual preset” to set it by hand."
+        )
+        self._refresh_ir_capture()
         self.preset_save_btn.setEnabled(editable)  # the floppy only stores a hand-built preset
         name = self.preset_combo.currentData()  # trash only deletes a stored user preset
         self.preset_del_btn.setEnabled(bool(name) and name != _MANUAL_PRESET and name not in _BUILTIN_WHITE_PRESETS)
@@ -1854,6 +1927,30 @@ class ScanlightSidebar(QWidget):
             if item is not None:
                 item.setEnabled(self._camera_verified)
 
+    def _ir_capture_ready(self) -> bool:
+        """Whether a scan shoots the IR frame: an IR-capable light, Capture IR on, and an IR exposure."""
+        s = self._settings
+        return self._rgb_mode and self._light_has_ir and s.capture_ir and s.ir_level > 0
+
+    def _refresh_ir_capture(self) -> None:
+        """Show the IR controls only for a light with an IR LED, and the IR exposure only once the
+        user says the camera records IR (Capture IR). A scan skips the IR frame until it has one."""
+        has_ir = self._light_has_ir
+        wanted = has_ir and self.capture_ir_btn.isChecked()
+        self.capture_ir_btn.setVisible(has_ir)
+        self.ir_slider.setVisible(wanted)
+        self._ir_shutter_row.setVisible(wanted)
+        measured = self._settings.ir_level > 0 or self._manual_mode
+        text = ""
+        if wanted and not measured and self.preset_combo.currentData():
+            text = (
+                "No IR exposure yet: calibrate a preset with Capture IR on. Scans skip the IR frame until then."
+                if self.preset_combo.currentData() in _BUILTIN_WHITE_PRESETS
+                else "No IR exposure yet: calibrate this preset with Capture IR on. Scans skip the IR frame until then."
+            )
+        self._ir_hint.setText(text)
+        self._ir_hint.setVisible(bool(text))
+
     def _refresh_light_channels(self) -> None:
         """Adapt the light controls to the connected Scanlight. An RGB-only body (v1-v3, no white
         LED) hides the W slider and greys out the white-light preset, since neither can do anything;
@@ -1861,6 +1958,7 @@ class ScanlightSidebar(QWidget):
         (`_push_light`). A body with a white LED (v4 / Big) keeps them."""
         has_white = self._light_has_white
         self.w_slider.setVisible(has_white)
+        self._refresh_ir_capture()
         model = self.preset_combo.model()
         for white_name in _BUILTIN_WHITE_PRESETS:
             white_idx = self.preset_combo.findData(white_name)
@@ -1916,8 +2014,10 @@ class ScanlightSidebar(QWidget):
             shutter = self._stepper_label(self.shutter_stepper)
             iso = self._stepper_label(self.iso_stepper)
             aperture = self._stepper_label(self.aperture_stepper)
+            ir_level, shutter_ir = int(self.ir_slider.value()), self._stepper_label(self.ir_shutter_stepper)
         else:
             shutter, iso, aperture = self._settings.shutter_r, self._settings.iso, self._settings.aperture
+            ir_level, shutter_ir = self._settings.ir_level, self._settings.shutter_ir
         updated = replace(
             self._settings,
             r_level=int(self.r_slider.value()),
@@ -1936,6 +2036,9 @@ class ScanlightSidebar(QWidget):
             shutter_w="" if self._settings.white_mode else shutter,
             iso=iso,
             aperture=aperture,
+            ir_level=ir_level,
+            shutter_ir=shutter_ir,
+            capture_ir=self.capture_ir_btn.isChecked(),
         )
         if updated == self._settings:
             return  # nothing changed → skip the disk write + re-gate (the 3 s poll calls this each tick)

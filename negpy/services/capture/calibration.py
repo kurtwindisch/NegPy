@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Callable, Optional
 
@@ -111,6 +111,10 @@ SHUTTER_CANDIDATES: tuple[str, ...] = (
     "1.6",
     "2",
 )
+
+IR_LETTER = "IR"
+# The color phases' share of the progress bar when the IR phase follows them.
+_COLOR_SHARE = 0.85
 
 # Fixed start point (Phase 1): a neutral reference the calibration always starts from,
 # normalized to the live ISO/aperture. Rig-measured on a Portra 400 clear base at
@@ -314,6 +318,16 @@ class ChannelCalibration:
 
 
 @dataclass(frozen=True)
+class IrCalibration:
+    """The IR frame's exposure, on target like a color channel."""
+
+    level: int
+    shutter: str
+    signal: float
+    target: int
+
+
+@dataclass(frozen=True)
 class CalibrationResult:
     """A successful calibration — every channel on target (anything else raises instead)."""
 
@@ -323,6 +337,8 @@ class CalibrationResult:
     # Sensor unmix from a single-capture run's probes (9 floats, row-major); None when they
     # could not give one.
     sensor_matrix: Optional[tuple[float, ...]] = None
+    ir: Optional[IrCalibration] = None  # set when the run calibrated the IR frame too
+    ir_error: str = ""  # why a requested IR phase gave no exposure; the color result stands
 
     @property
     def levels(self) -> tuple[int, int, int]:
@@ -436,6 +452,83 @@ class CalibrationService:
         progress: Optional[ProgressCb] = None,
         cancel=None,
         single_capture: bool = False,
+        ir: bool = False,
+    ) -> CalibrationResult:
+        """`ir` adds the IR frame's phase after the color phases, on the same ladder."""
+        if not ir:
+            return self._calibrate_color(
+                roi, scratch_path, start_levels, start_shutter, target_fraction, candidates, progress, cancel, single_capture
+            )
+        color_progress = None if progress is None else (lambda frac, msg: progress(frac * _COLOR_SHARE, msg))
+        result = self._calibrate_color(
+            roi, scratch_path, start_levels, start_shutter, target_fraction, candidates, color_progress, cancel, single_capture
+        )
+        # An IR failure never costs the color result. A cancel still ends the run.
+        try:
+            ir_cal = self.calibrate_ir(
+                roi, scratch_path, target_fraction=target_fraction, candidates=candidates, progress=progress, cancel=cancel
+            )
+        except (CalibrationExposureError, RuntimeError) as exc:
+            if cancel is not None and cancel.is_set():
+                raise
+            logger.info("IR calibration gave no exposure: %s", exc)
+            return replace(result, ir_error=_IR_ERRORS.get(getattr(exc, "status", ""), "the camera records no IR"))
+        if progress is not None:
+            progress(1.0, "Calibration done")
+        return replace(result, ir=ir_cal)
+
+    def calibrate_ir(
+        self,
+        roi: Roi,
+        scratch_path: str,
+        *,
+        target_fraction: float = TARGET_FRACTION,
+        candidates: tuple[str, ...] = SHUTTER_CANDIDATES,
+        progress: Optional[ProgressCb] = None,
+        cancel=None,
+    ) -> IrCalibration:
+        """Solve the IR LED level and shutter for the base on the same model as a color channel,
+        metered on the sensor channel that records the most IR. Needs an IR-converted camera:
+        raises like a color channel when the target is out of reach."""
+        candidates = usable_ladder(tuple(candidates)) or SHUTTER_CANDIDATES
+        start_shutter = nearest_shutter(REFERENCE_SHUTTER, candidates)
+        T = target_signal(target_fraction)
+        channel: list[int] = []
+
+        def _report(frac: float, msg: str) -> None:
+            if progress is not None:
+                progress(frac, msg)
+
+        def _shoot(_i: int, _ch, level: int, shutter: str) -> tuple[float, float, float]:
+            if cancel is not None and cancel.is_set():
+                raise RuntimeError("calibration cancelled")
+            self._light.set_color(ir=level)
+            self._sleep(self._settle_s)
+            img, written = self._capture(scratch_path, shutter=shutter)
+            if not channel:
+                channel.append(int(np.argmax([meter_base(img[..., c], roi) for c in range(3)])))
+            c = channel[0]
+            source_linearity, source_plateau = self._source_clip_fraction(written, c, roi)
+            return meter_base(img[..., c], roi), max(clip_fraction(img[..., c], roi), source_linearity), source_plateau
+
+        ir = _IrChannel()
+        try:
+            _report(_COLOR_SHARE, "Probing IR…")
+            k = self._measure_response(0, ir, PWM_MAX_SAFE, start_shutter, candidates, _shoot)
+            if k * PWM_MAX * true_seconds(candidates[-1], candidates) < (1.0 - MAX_TARGET_UNDER_FRACTION) * T:
+                raise CalibrationExposureError("under", IR_LETTER)
+            shutter, levels = _solve_shared({IR_LETTER: k}, T, candidates)
+            _report(0.95, "Setting IR…")
+            cal = self._verify_channel(0, ir, levels[IR_LETTER], shutter, T, _shoot)
+            return IrCalibration(level=cal.level, shutter=cal.shutter, signal=cal.signal, target=T)
+        finally:
+            try:
+                self._light.off()
+            except Exception:
+                logger.exception("failed to turn the Scanlight off after calibration")
+
+    def _calibrate_color(
+        self, roi, scratch_path, start_levels, start_shutter, target_fraction, candidates, progress, cancel, single_capture
     ) -> CalibrationResult:
         candidates, start_shutter, _report, _check_cancel = _run_setup(candidates, start_shutter, progress, cancel)
         T = target_signal(target_fraction)
@@ -757,6 +850,15 @@ class CalibrationService:
         RAW format, so the handed-in path is only a stem; the clip check must read what exists)."""
         written = self._camera.capture(path, shutter=shutter)
         return self._demosaic(written), written
+
+
+_IR_ERRORS = {"over": "the IR frame clips even at the minimum exposure", "under": "the IR frame stays too dim even at the slowest shutter"}
+
+
+class _IrChannel:
+    """The IR LED in the probe and verify loops, which read a channel's letter only."""
+
+    letter = IR_LETTER
 
 
 def _channel_status(measured: float, linearity_clip: float, plateau_clip: float, target: int) -> str:

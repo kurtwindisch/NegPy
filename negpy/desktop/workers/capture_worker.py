@@ -12,7 +12,7 @@ from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
-from negpy.infrastructure.capture.base import CaptureSettings
+from negpy.infrastructure.capture.base import CaptureSettings, IrExposure
 from negpy.infrastructure.capture.gphoto import (
     CameraCapabilities,
     CameraClaimedError,
@@ -21,7 +21,7 @@ from negpy.infrastructure.capture.gphoto import (
     LiveViewUnsupported,
     list_cameras,
 )
-from negpy.infrastructure.capture.protocol import describe_hardware, has_white_channel
+from negpy.infrastructure.capture.protocol import describe_hardware, has_ir_channel, has_white_channel
 from negpy.infrastructure.capture.scanlight import Scanlight
 from negpy.infrastructure.capture.settings import WhiteCaptureMode
 from negpy.kernel.system.logging import get_logger
@@ -60,6 +60,11 @@ class CaptureRequest:
     as_roll: bool = False
     single_capture: bool = False  # RGB preset shot as one exposure with all three LEDs lit
     sensor_profile: str = ""  # the single-capture preset's sensor profile, for the frame's roll
+    ir_level: int = 0  # > 0 shoots an IR frame after the color exposure(s); Big Scanlight only
+    shutter_ir: str = ""
+
+    def ir_exposure(self) -> Optional[IrExposure]:
+        return IrExposure(self.ir_level, self.shutter_ir or None) if self.ir_level > 0 else None
 
 
 @dataclass(frozen=True)
@@ -90,6 +95,7 @@ class CalibrationRequest:
     start_levels: tuple[int, int, int] = REFERENCE_LEVELS
     start_shutter: str = REFERENCE_SHUTTER
     single_capture: bool = False  # solve for R, G and B lit together in one exposure
+    calibrate_ir: bool = False  # add the IR frame's phase (an IR-capable light, and Capture IR on)
 
 
 # The central half of the frame, the region a sensor profile built from files measures.
@@ -317,6 +323,7 @@ class CaptureWorker(QObject):
                     shutter=req.shutter_w or None,
                     settle_s=req.settle_s,
                     cancel=self._cancel,
+                    ir=req.ir_exposure(),
                 )
                 self.finished.emit([path])
                 return
@@ -331,6 +338,7 @@ class CaptureWorker(QObject):
                 shutters=_shutters_or_none(req.shutters),
                 iso=req.iso or None,  # force the preset's exposure on the body before each shot
                 aperture=req.aperture or None,
+                ir=req.ir_exposure(),
             )
             if req.single_capture:  # one narrowband exposure, imported as an ordinary single RAW
                 self.status.emit("Capturing…")
@@ -338,7 +346,7 @@ class CaptureWorker(QObject):
                 return
 
             self.status.emit("Capturing R / G / B…")
-            _names = {"R": "red", "G": "green", "B": "blue"}
+            _names = {"R": "red", "G": "green", "B": "blue", "IR": "IR"}
 
             def _on_channel(letter: str) -> None:
                 self.channel.emit(letter)
@@ -433,6 +441,7 @@ class CaptureWorker(QObject):
             "light_ok": False,
             "light_detail": "not connected",
             "light_has_white": True,
+            "light_has_ir": False,
             "usb_claimed_elsewhere": False,
             # Advertised abilities of the last body opened. Optimistic until a session has been
             # opened: never grey a control out on an uninspected body.
@@ -497,6 +506,7 @@ class CaptureWorker(QObject):
             fw, hw = self._ensure_light(port).get_fw_version()
             status["light_ok"], status["light_detail"] = True, f"{describe_hardware(hw)} (fw{fw})"
             status["light_has_white"] = has_white_channel(hw)
+            status["light_has_ir"] = has_ir_channel(hw)
         except Exception:
             pass
         self.poll_status.emit(status)
@@ -609,6 +619,7 @@ class CaptureWorker(QObject):
                     progress=self.calibration_progress.emit,
                     cancel=self._cancel,
                     single_capture=req.single_capture,
+                    ir=req.calibrate_ir,
                 )
             self.calibration_finished.emit(result)
         except CalibrationExposureError as e:
