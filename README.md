@@ -16,7 +16,7 @@ NegPy turns scans of film negatives and slides into finished pictures. I wrote i
 
 ![NegPy main window](docs/media/0650.webp)
 
-The [User Guide](docs/USER_GUIDE.md) covers every panel and control (the ⓘ on each panel opens it in the app). [PIPELINE.md](docs/PIPELINE.md) explains the math.
+New to NegPy? Start with [Getting Started](docs/GETTING_STARTED.md), an illustrated walk through the app. The [User Guide](docs/USER_GUIDE.md) covers every panel and control (the ⓘ on each panel opens it in the app). [PIPELINE.md](docs/PIPELINE.md) explains the math.
 
 ## Languages
 

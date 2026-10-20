@@ -8,6 +8,8 @@ Guidance for Claude Code in this repository. It holds rules and traps the code d
 
 > **Keep the translations current, in the same change.** Wrap every user-visible string in `tr` (`mark` for a lookup key). A change that adds or rewords display text runs `make translations` and fills every registered catalog. A `docs/USER_GUIDE.md` change runs `make translations`, updates the same panels in each `negpy/translations/USER_GUIDE.<locale>.md` and sets their `src:` hash. The `update-translations` skill has the steps; `tests/test_i18n.py` fails on a missing entry, a bare display string or a stale guide panel, and prints the fix. Translate a label for its use, not its dictionary entry: read the call site, because a homonym (Draw, Free, Stop, Order, Stock, Capture, Grain, Feather) has a wrong sense in every language, and a button is a short noun or verb, never a polite sentence.
 
+> **Keep `docs/GETTING_STARTED.md` in step with the tour** (`widgets/tutorial_steps.py`). A new or renamed step gets an entry in `SLUGS` in `scripts/getting_started_screens.py`; run `make getting-started-screens` after a change that alters a tour screen.
+
 > **Leave `docs/CHANGELOG.md` alone unless asked.** It is written per release, not per change.
 
 ## Commands
@@ -21,6 +23,7 @@ make lint         # ruff check
 make type         # ty check (not mypy)
 make format       # ruff format + autofix
 make translations # Extract translation sources and preserve existing translations
+make getting-started-screens # Retake the docs/GETTING_STARTED.md screens from the tour
 
 # Single test
 uv run pytest tests/test_exposure_logic.py::test_name -v

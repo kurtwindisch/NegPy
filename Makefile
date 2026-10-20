@@ -27,6 +27,11 @@ translations:
 translations-check:
 	@$(UV) python scripts/extract_translations.py --check
 
+# Retake the screens of docs/GETTING_STARTED.md from the tour (opens a window)
+.PHONY: getting-started-screens
+getting-started-screens:
+	@$(UV) python scripts/getting_started_screens.py
+
 # Install dependencies
 .PHONY: install
 install:
