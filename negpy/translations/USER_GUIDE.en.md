@@ -787,7 +787,7 @@ Shown while a Scanlight is connected. A preset holds the light levels and the ca
     *   **Built-in Presets**: ready to use, with no calibration: **White Light**, **White Light + IR**, **Trichrome** and **Trichrome + IR**. They use the camera's exposure, which the meter sets. White Light needs a Scanlight with a white LED (v4, Big Scanlight).
     *   **Calibrate on the Film Base…**: place the rectangle on clear film and run it. NegPy finds the light levels and the shutter.
     *   **Set by Hand**: set the sliders yourself, then save them as a preset.
-*   **Red**, **Green**, **Blue**, **White**: the light levels (0 to 255). **Light On** turns the light on to frame the film, or off.
+*   **Red**, **Green**, **Blue**, **White**: the light levels (0 to 255). With a White Light preset, set White to make the light brighter or dimmer. **Light On** turns the light on to frame the film, or off.
 *   **Capture mode**: **Triplet** takes one exposure per color and joins them; **Single Capture** takes one exposure with all three colors on.
 *   **Create Sensor Profile** (Single Capture): also saves a sensor profile for this preset (see Calibration, §10.3).
 *   **ISO**, **Shutter**, **Aperture**: the preset's exposure. A change holds until you pick the preset again. The gauge button meters.

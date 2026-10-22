@@ -1241,6 +1241,36 @@ def test_builtin_white_preset_turns_rgb_off_and_white_full():
     assert w.w_slider.value() == 255  # white on full
 
 
+def test_white_preset_lets_the_white_slider_and_light_toggle_drive_the_light():
+    """Issue #1478: under a built-in white-light preset, W sets the scan light and Light On/Off work."""
+    w = _sidebar()
+    idx = w.preset_combo.findData("White Light (B&W or Slide Film)")
+    w.preset_combo.setCurrentIndex(idx)
+    w._on_preset_selected(idx)
+    assert w.w_slider.isEnabled()
+    assert not any(s.isEnabled() for s in (w.r_slider, w.g_slider, w.b_slider))
+    w.w_slider.setValue(120)
+    w._push_light()  # what the slider's debounce runs
+    assert w.controller.set_scanlight_color.call_args[0][:4] == (0, 0, 0, 120)
+    assert w._settings.w_level == 120  # the scan lights white at this level
+    w.light_btn.click()
+    assert w.controller.set_scanlight_color.call_args[0][:4] == (0, 0, 0, 120)
+    w._on_light_set(0, 0, 0, 120)
+    w.light_btn.click()
+    assert w.controller.set_scanlight_color.call_args[0][:4] == (0, 0, 0, 0)
+
+
+def test_the_white_slider_locks_once_the_white_preset_is_deselected():
+    w = _sidebar()
+    idx = w.preset_combo.findData("White Light (B&W or Slide Film)")
+    w.preset_combo.setCurrentIndex(idx)
+    w._on_preset_selected(idx)
+    w.preset_combo.setCurrentIndex(0)  # "Select preset"
+    w._on_preset_selected(0)
+    assert w._settings.white_mode  # sticky, so W follows the selection instead
+    assert not w.w_slider.isEnabled()
+
+
 @pytest.mark.parametrize("has_white", [True, False])
 def test_live_view_frames_with_the_preset_rgb_values(has_white):
     # The framing/focusing light IS the preset's RGB (one light for scanning and focusing), never

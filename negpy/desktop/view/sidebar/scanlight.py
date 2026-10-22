@@ -2275,8 +2275,8 @@ class ScanlightSidebar(QWidget):
     def _refresh_preset_ui(self) -> None:
         """Sync the preset-area widgets to the current mode. The Live View exposure steppers hide in
         RGB mode while no preset is selected; a recipe keeps them live. The Capture mode row hides for a white-light preset;
-        the exposure steppers stay, editable under every built-in and a hand-set recipe. The sliders
-        and Save are editable only while building a hand-set recipe."""
+        the exposure steppers stay, editable under every built-in and a hand-set recipe. The R/G/B
+        sliders and Save are editable only while building a hand-set recipe, W under a white-light preset."""
         locked = self._rgb_mode and not self._settings.white_mode and not (self._manual_mode or self._free_exposure)
         self.lv_window.settings_widget.setVisible(not locked)
         if not hasattr(self, "inter_exposure_delay_slider"):
@@ -2288,7 +2288,10 @@ class ScanlightSidebar(QWidget):
         self.inter_exposure_delay_slider.setEnabled(not self._settings.single_capture)
         for slider in (self.r_slider, self.g_slider, self.b_slider):
             slider.setEnabled(editable)
-        self.w_slider.setEnabled(False)  # the Scanlight can't light white with RGB → a manual RGB preset keeps W off
+        # The Scanlight cannot light white with RGB: W is the level of a selected white-light preset only.
+        # white_mode alone outlives the selection, so it cannot gate W.
+        builtin = _BUILTIN_PRESETS.get(self.preset_combo.currentData())
+        self.w_slider.setEnabled(builtin is not None and builtin.white and self._light_has_white)
         tip = (
             tr("Set it for this preset, in the camera's own steps.")
             if exposure_editable
