@@ -25,6 +25,8 @@ struct StripGeometry {
     angle: f64,
     px_per_mm: f64,
     center: f64,
+    /// One row of holes, so `center` is assumed from the format.
+    lone_row: bool,
 }
 
 /// One frame size of a format, in mm. `along` runs with the film.
@@ -93,10 +95,14 @@ const FAR_SIDE_LEVEL: f32 = 0.08;
 const LINE_SPAN: usize = 8;
 const LINE_STEP: f32 = 0.02;
 const LINE_ROWS: f64 = 0.8;
-const GUTTER_INSET: f64 = 0.40;
+const GUTTER_INSET: f64 = 0.10;
 const GUTTER_MM: f64 = 3.0;
 const GUTTER_WALL: usize = 8;
 const GUTTER_EXPOSED: f64 = 0.2;
+/// How far from its place, and over what width, a frame's edge must show when a lone row sets it.
+const ROW_EDGE_REACH_MM: f64 = 1.0;
+const ROW_EDGE_SPAN_MM: f64 = 0.4;
+const ROW_EDGE_SHARE: f64 = 0.3;
 
 #[derive(Clone, Copy)]
 struct Hole {
@@ -255,6 +261,7 @@ fn read_sprockets(lum: &[f32], h: usize, w: usize) -> Option<StripGeometry> {
         angle,
         px_per_mm,
         center,
+        lone_row: second.is_none(),
     })
 }
 
@@ -364,6 +371,13 @@ fn find_frame(
     };
     let min_run = ((CLEAN_RUN * long) as usize).max(MIN_CLEAN_RUN);
     let band = &d[a * w..b * w];
+    let edge_level = levels[levels.len() - 1];
+    let frame_ends = |l: usize, r: usize| {
+        !g.lone_row
+            || [y0, y1]
+                .iter()
+                .all(|&edge| has_row_edge(&d, (h, w), edge, (l, r), edge_level, g.px_per_mm))
+    };
     for &level in levels {
         let exposed = exposed_columns(band, w, tone, level);
         let (left, right) = sides(&exposed, min_run);
@@ -382,12 +396,43 @@ fn find_frame(
             }
         }
         if let Some((_, l, r)) = best {
-            return Some((y0, y1, l, r));
+            return frame_ends(l, r).then_some((y0, y1, l, r));
         }
     }
     let width = spec.frame_width * long;
     let (l, r) = one_sided(band, w, tone, levels[0], width, g.px_per_mm, min_run)?;
-    Some((y0, y1, l, r))
+    frame_ends(l, r).then_some((y0, y1, l, r))
+}
+
+/// A density step along the frame's rows near `edge`, or an edge off the plane. A lone row places
+/// the frame by assuming the format, and a larger format's picture runs past the far edge with no step.
+fn has_row_edge(
+    d: &[f32],
+    (h, w): (usize, usize),
+    edge: i64,
+    (l, r): (usize, usize),
+    level: f32,
+    px_per_mm: f64,
+) -> bool {
+    if edge < 0 || edge >= h as i64 {
+        return true;
+    }
+    let reach = (ROW_EDGE_REACH_MM * px_per_mm) as i64;
+    let span = ((ROW_EDGE_SPAN_MM * px_per_mm) as i64).max(2);
+    let (lo, hi) = (
+        (edge - reach).max(span),
+        (edge + reach).min(h as i64 - span - 1),
+    );
+    (lo..=hi).any(|y| {
+        let inner = &d[(y + span) as usize * w + l..(y + span) as usize * w + r];
+        let outer = &d[(y - span) as usize * w + l..(y - span) as usize * w + r];
+        let steps = inner
+            .iter()
+            .zip(outer)
+            .filter(|(a, b)| (**a - **b).abs() > level)
+            .count();
+        steps as f64 >= ROW_EDGE_SHARE * (r - l) as f64
+    })
 }
 
 fn exposed_columns(band: &[f32], w: usize, tone: f32, level: f32) -> Vec<f64> {
@@ -410,7 +455,7 @@ fn longest_clean_run(exposed: &[f64]) -> usize {
     longest
 }
 
-/// A narrow clean run in the middle of the frame, with exposed film on both sides: a gutter.
+/// A narrow clean run inside the frame, with exposed film on both sides: a gutter or a frame gap.
 fn has_gutter(exposed: &[f64], l: usize, r: usize, px_per_mm: f64) -> bool {
     let inset = ((r - l) as f64 * GUTTER_INSET) as usize;
     let mut i = l + inset;

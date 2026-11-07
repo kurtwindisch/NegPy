@@ -124,6 +124,56 @@ def test_a_strip_running_top_to_bottom_returns_input_coordinates():
     assert _near(found.roi, (W - x2, W - x1, y1, y2))
 
 
+def _other_format(
+    *, frame_w: float, frame_h: float, film_h: float, rows: tuple, seed: int, slide=False, line_at: float = 0.0
+) -> np.ndarray:
+    """Frames across a scan of another format that shares the 35mm hole pitch. Sizes in mm."""
+    rebate, low, high = (0.012, 0.15, 0.6) if slide else (0.55, 0.08, 0.3)
+    mm = 1600 / 100
+    scan_h, scan_w, half = int(70 * mm), int(100 * mm), frame_h / 2 * mm
+    img = np.full((scan_h, scan_w), 1.0, np.float32)
+    middle = scan_h / 2
+    img[max(0, int(middle - film_h / 2 * mm)) : int(middle + film_h / 2 * mm)] = rebate
+    picture = low + (high - low) * _texture(seed, (scan_h, scan_w))
+    start = np.random.default_rng(seed).uniform(0, (frame_w + 2.5) * mm)
+    for x0 in np.arange(start - scan_w, scan_w, (frame_w + 2.5) * mm):
+        a, b = max(0, int(x0)), max(0, int(x0 + frame_w * mm))
+        img[int(middle - half) : int(middle + half), a:b] = picture[int(middle - half) : int(middle + half), a:b]
+        if line_at:
+            img[int(middle - half) : int(middle + half), max(0, int(x0 + line_at * mm)) : b] *= 0.5
+    for row in rows:
+        y = int(middle + row * mm)
+        for x in np.arange(2.0, 98.0, 4.75):
+            img[y - int(1.4 * mm) : y + int(1.4 * mm), int((x - 1) * mm) : int((x + 1) * mm)] = 1.0
+    return np.stack([img] * 3, axis=-1).astype(np.float32)
+
+
+@pytest.mark.parametrize("slide", [False, True])
+@pytest.mark.parametrize("frame_w", [42.0, 56.0, 70.0])
+@pytest.mark.parametrize("seed", range(6))
+def test_a_larger_format_with_one_row_steps_aside(frame_w, seed, slide):
+    img = _other_format(frame_w=frame_w, frame_h=56.0, film_h=61.5, rows=(29.0,), seed=seed, slide=slide)
+    assert _detect_strip_frame(img, slide) is None
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_a_lone_row_still_places_a_35mm_frame(seed):
+    img = _other_format(frame_w=36.0, frame_h=24.3, film_h=35.0, rows=(14.0,), seed=seed)
+    found = _detect_strip_frame(img, False)
+    assert found is not None
+    y1, y2, x1, x2 = found.roi
+    assert (y2 - y1) / 16 == pytest.approx(24.3, abs=0.3) and (x2 - x1) / 16 == pytest.approx(36.0, abs=0.5)
+
+
+@pytest.mark.parametrize("frame_w", [23.0, 24.0])
+@pytest.mark.parametrize("seed", range(6))
+def test_a_short_frame_between_neighbors_steps_aside(frame_w, seed):
+    """A straight scene edge in the neighbor sits where a 36 mm frame would end."""
+    line_at = 36.2 - frame_w - 2.5
+    img = _other_format(frame_w=frame_w, frame_h=24.0, film_h=35.0, rows=(-14.0, 14.0), seed=seed, line_at=line_at)
+    assert _detect_strip_frame(img, False) is None
+
+
 @pytest.mark.parametrize("gutter", [0.6, 1.0, 2.0])
 def test_two_half_frames_step_aside(gutter):
     assert _detect_strip_frame(_strip(gutter=gutter), False) is None
