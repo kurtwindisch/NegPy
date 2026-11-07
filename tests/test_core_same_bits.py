@@ -44,7 +44,23 @@ def _filled(fill):
 
 _LAB = (_IMG3 * np.array([100.0, 160.0, 160.0], np.float32) - np.array([0.0, 80.0, 80.0], np.float32)).astype(np.float32)
 
+
+def _film_strip() -> np.ndarray:
+    """A strip with a one-pixel step in its rails every 300 columns, so its tilt is not zero."""
+    img = np.full((600, 900), 0.55, np.float32)
+    img[100:500, 150:750] = 0.2 + 0.3 * (np.indices((400, 600)).sum(0) % 97) / 97
+    for top in (30, 520):
+        for x in range(20, 860, 80):
+            y = top + x // 300
+            img[y : y + 44, x : x + 34] = 1.0
+    return img
+
+
 _CASES = {
+    "find_strip_frame": lambda: np.array(
+        [v for part in negpy_core.find_strip_frame(_film_strip(), False) for v in (part if isinstance(part, tuple) else (part,))],
+        np.float64,
+    ),
     "chroma_spread": lambda: np.array(negpy_core.chroma_spread(_IMG3, 4, 0.003, 0.97, 0.1)),
     "percentiles": lambda: np.array(negpy_core.percentiles(_IMG1.ravel(), [0.5, 1.0, 37.0, 50.0, 99.0]), np.float32),
     "resize_area_general": lambda: negpy_core.resize_area(_IMG3, (47, 31)),
@@ -172,6 +188,7 @@ _CASES = {
 }
 
 _HASHES = {
+    "find_strip_frame": "4c7d29dc798c7c2c3992d52abd26404f7c8700c9cb385b33c9a060c2e3b77b86",
     "chroma_spread": "aae81d8aac0dbd96fc0285f75e75588281672804262ab7aaf65e8e0bc5ec66f3",
     "percentiles": "0874152b6e9f91bd3a3b73e15a9d083d15b6e8c7c6f6a9279d9241df10a88464",
     "resize_area_general": "dbe0fb9e51b0e8bee54cc2bb35756bbf0934077b458c1a44ea27c2e5dd96a16f",

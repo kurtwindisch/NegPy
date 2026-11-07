@@ -38,7 +38,8 @@ from negpy.infrastructure.loaders.factory import loader_factory
 from negpy.infrastructure.loaders.helpers import unsupported_raw_reason
 from negpy.features.rgbscan.models import RgbScanConfig, is_rgb_triplet
 from negpy.features.stitch.models import StitchConfig, stitch_active
-from negpy.features.geometry.models import squares_on_arm
+from negpy.features.geometry.logic import strip_tilt
+from negpy.features.geometry.models import holds_own_skew, squares_on_arm
 from negpy.features.geometry.processor import GeometryProcessor
 from negpy.features.geometry.skew import squared_geometry
 from negpy.infrastructure.display.color_spaces import WORKING_COLOR_SPACE
@@ -47,7 +48,7 @@ from negpy.kernel.system.config import APP_CONFIG
 from negpy.kernel.system.logging import get_logger
 from negpy.kernel.system.memory import available_system_memory_bytes
 from negpy.kernel.system import timing
-from negpy.services.rendering.image_processor import ImageProcessor, preview_takes_unmix, read_source_base
+from negpy.services.rendering.image_processor import ImageProcessor, preview_takes_unmix, read_source_base, strip_slide_of
 from negpy.services.rendering.prefetch_policy import MIN_RAM_RESERVE_BYTES
 
 logger = get_logger(__name__)
@@ -254,6 +255,7 @@ class BatchAutoCropResult:
     calibrated: bool
     # Tilt and Swing Square Before Crop set before detection; None leaves the frame's own.
     keystone: Optional[tuple[float, float]] = None
+    straightened: bool = False
 
 
 @dataclass(frozen=True)
@@ -1766,7 +1768,8 @@ class BatchAutoCropWorker(QObject):
             corrected = flatfield_source(raw, config, gain_slices_for_asset(file_info), orientation=meta.get("orientation", 1))
             geometry = config.geometry
             keystone = None
-            if squares_on_arm(geometry):
+            slide = strip_slide_of(config)
+            if squares_on_arm(geometry) and (slide is None or strip_tilt(corrected, geometry, slide) is None):
                 fit = squared_geometry(corrected, geometry, config.process.process_mode)
                 if fit is not None:
                     keystone = (fit[0].converge_v, fit[0].converge_h)
@@ -1790,6 +1793,8 @@ class BatchAutoCropWorker(QObject):
                 transformed,
                 target_ratio=config.geometry.autocrop_ratio,
                 rebate_trim=config.geometry.autocrop_rebate_trim,
+                strip_slide=slide,
+                own_skew=holds_own_skew(geometry),
             )
             return evidence, keystone
         except Exception:
@@ -1856,6 +1861,7 @@ class BatchAutoCropWorker(QObject):
                         confidence=crop.confidence,
                         calibrated=crop.calibrated,
                         keystone=keystone_by_key.get(crop.key),
+                        straightened=crop.straightened,
                     )
                 )
             self._emit_finished_unless_cancelled(generation, results)

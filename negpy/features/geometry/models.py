@@ -186,6 +186,12 @@ def squares_on_arm(geometry: GeometryConfig) -> bool:
     return geometry.autocrop_square and not geometry.autocrop_squared and not holds_own_skew(geometry)
 
 
+def straightens_on_arm(geometry: GeometryConfig) -> bool:
+    """Auto Crop may set Fine Rotation from a film strip's own marks: Image only, not yet run for
+    this arm, and no skew of the frame's own. The arm mark keeps a reset rotation at 0."""
+    return geometry.autocrop_mode == AutocropMode.IMAGE and not geometry.autocrop_squared and not holds_own_skew(geometry)
+
+
 def with_auto_crop(config: "WorkspaceConfig", on: bool) -> "WorkspaceConfig":
     """*config* with Auto Crop on (armed) or off (uncropped). Every path that turns it on or
     off goes through here: a rect kept across the switch would read as the other kind."""

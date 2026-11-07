@@ -42,8 +42,15 @@ from negpy.features.exposure.models import RenderIntent
 from negpy.features.flatfield.logic import apply_flatfield, flatfield_token
 from negpy.features.lab.logic import apply_resize_sharpening
 from negpy.services.rendering.lens import flatfield_source, lens_decode_token, metadata_lens_corrections, prepare_lens_source
-from negpy.features.geometry.logic import autocrop_detection_key, meter_detection_key, resolve_autocrop_rect, resolve_meter_rect
-from negpy.features.geometry.models import crops_frame, squares_on_arm
+from negpy.features.geometry.logic import (
+    MAX_STRIP_ROTATION,
+    autocrop_detection_key,
+    meter_detection_key,
+    resolve_autocrop_rect,
+    resolve_meter_rect,
+    strip_tilt,
+)
+from negpy.features.geometry.models import AutocropMode, crops_frame, squares_on_arm, straightens_on_arm
 from negpy.features.geometry.skew import squared_geometry
 from negpy.features.retouch.logic import (
     apply_hair_inpaint,
@@ -75,7 +82,7 @@ from negpy.features.rgbscan.models import RgbScanConfig, is_rgb_triplet
 from negpy.features.stitch.logic import stitch_composite
 from negpy.features.hdr.logic import merge_bracket
 from negpy.features.hdr.models import hdr_active, hdr_token
-from negpy.features.stitch.models import stitch_has_triplets, stitch_token
+from negpy.features.stitch.models import stitch_active, stitch_has_triplets, stitch_token
 from negpy.domain.interfaces import PipelineContext
 from negpy.services.rendering.base_read import NOT_READ, base_log_for, cached_base_log
 from negpy.services.rendering.engine import DarkroomEngine
@@ -212,7 +219,16 @@ class ArmedCrop(NamedTuple):
     rect: Optional[Tuple[float, float, float, float]]  # None when no crop was found
     key: str  # autocrop_detection_key of the geometry the rect was found on
     skew: Optional[Tuple[float, float, float]]  # Fine Rotation, Tilt, Swing squared to; None if not measured
-    squared: bool  # Square Before Crop ran for this arm
+    squared: bool  # Square Before Crop or a film strip's tilt ran for this arm
+    from_strip: bool = False  # a film strip's tilt ran, which holds with Square Before Crop off
+
+
+def strip_slide_of(settings: WorkspaceConfig) -> Optional[bool]:
+    """What film strip detection reads this frame as: True for a slide, False for a negative, None
+    for a stitch, whose joined frames would crop down to one."""
+    if stitch_active(settings.stitch):
+        return None
+    return render_path(settings.process) is not RenderPath.PRINT
 
 
 def _resolve_armed_autocrop(img: np.ndarray, settings: WorkspaceConfig) -> Tuple[WorkspaceConfig, Optional[ArmedCrop]]:
@@ -227,21 +243,32 @@ def _resolve_armed_autocrop(img: np.ndarray, settings: WorkspaceConfig) -> Tuple
         return settings, None
     skew = None
     tried = squares_on_arm(geom)
-    if tried:
+    from_strip = False
+    slide = strip_slide_of(settings) if geom.autocrop_mode == AutocropMode.IMAGE else None
+    tilt = None if slide is None else strip_tilt(img, geom, slide)
+    if tilt is None:
+        slide = None  # Searched: the rect does not search again.
+    if tilt is not None and straightens_on_arm(geom) and abs(tilt) <= MAX_STRIP_ROTATION:
+        geom = dc_replace(geom, fine_rotation=tilt)
+        skew = (geom.fine_rotation, geom.converge_v, geom.converge_h)
+        key = autocrop_detection_key(geom)
+        tried = from_strip = True
+    elif tried and tilt is None:
         fit = squared_geometry(img, geom, settings.process.process_mode)
         if fit is not None:
             geom = fit[0]
             skew = (geom.fine_rotation, geom.converge_v, geom.converge_h)
             key = autocrop_detection_key(geom)
+    if tried:
         # Marked here too, so a later resolver call on these settings (export, then its own
         # pipeline) does not fit again.
         geom = dc_replace(geom, autocrop_squared=True)
-    rect = resolve_autocrop_rect(img, geom, APP_CONFIG.preview_render_size)
+    rect = resolve_autocrop_rect(img, geom, APP_CONFIG.preview_render_size, strip_slide=slide)
     if rect is None and not tried:
         return settings, None
     if rect is not None:
         geom = dc_replace(geom, crop_rect=rect, crop_detect_key=key)
-    return dc_replace(settings, geometry=geom), ArmedCrop(rect, key, skew, tried)
+    return dc_replace(settings, geometry=geom), ArmedCrop(rect, key, skew, tried, from_strip)
 
 
 _METER_MEMO_SIZE = 64
@@ -271,7 +298,7 @@ def _resolve_meter_rect(
     if memo is not None and (source_key, key) in memo:
         rect = memo[(source_key, key)]
     else:
-        rect = resolve_meter_rect(img, geom, APP_CONFIG.preview_render_size)
+        rect = resolve_meter_rect(img, geom, APP_CONFIG.preview_render_size, strip_slide=strip_slide_of(settings))
         if memo is not None:
             if len(memo) >= _METER_MEMO_SIZE:
                 memo.pop(next(iter(memo)))

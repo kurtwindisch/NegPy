@@ -186,6 +186,7 @@ from negpy.features.geometry.models import (
     AutocropMode,
     crops_frame,
     squares_on_arm,
+    straightens_on_arm,
     with_auto_crop,
 )
 from negpy.features.geometry.skew import squared_geometry
@@ -4878,7 +4879,11 @@ class AppController(QObject):
                         conflicted += 1
                         continue
 
-                    new_geometry = replace(base_geometry, fine_rotation=float(fine_rotation))
+                    new_geometry = replace(
+                        base_geometry,
+                        fine_rotation=float(fine_rotation),
+                        autocrop_squared=result.straightened or base_geometry.autocrop_squared,
+                    )
                     # Kept auto under the key it was found for, so a later Crop-card change re-detects it.
                     new_geometry = replace(
                         new_geometry,
@@ -10068,7 +10073,7 @@ class AppController(QObject):
         resolved = metrics.get("autocrop_resolved")
         if resolved is None:
             return
-        rect, key, skew, squared = resolved
+        rect, key, skew, squared, from_strip = resolved
         if rect is None and not squared:
             return
         geom = self.state.config.geometry
@@ -10076,7 +10081,7 @@ class AppController(QObject):
             return
         if squared:
             # Square was turned off, the frame got its own angle, or another render squared it.
-            if not squares_on_arm(geom):
+            if not (straightens_on_arm(geom) if from_strip else squares_on_arm(geom)):
                 return
             if skew is not None:
                 geom = replace(geom, fine_rotation=skew[0], converge_v=skew[1], converge_h=skew[2])

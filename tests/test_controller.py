@@ -3001,6 +3001,26 @@ class TestAppController(unittest.TestCase):
         )
         self.mock_session_manager.update_config.assert_not_called()
 
+    def test_freeze_keeps_a_strip_rotation_with_square_off(self):
+        self._armed_auto_crop(square=False)
+        straight = replace(self.controller.state.config.geometry, fine_rotation=1.2)
+        self.controller._freeze_resolved_auto_crop(
+            {"autocrop_resolved": ArmedCrop((0.1, 0.1, 0.9, 0.9), autocrop_detection_key(straight), (1.2, 0.0, 0.0), True, True)}
+        )
+        geometry = self.mock_session_manager.update_config.call_args.args[0].geometry
+        self.assertEqual(geometry.fine_rotation, 1.2)
+        self.assertTrue(geometry.autocrop_squared)
+
+    def test_freeze_drops_a_strip_rotation_when_the_frame_got_its_own_angle_meanwhile(self):
+        self._armed_auto_crop(square=False)
+        hand = replace(self.controller.state.config.geometry, fine_rotation=0.4)
+        self.controller.state.config = replace(self.controller.state.config, geometry=hand)
+        straight = replace(hand, fine_rotation=1.2)
+        self.controller._freeze_resolved_auto_crop(
+            {"autocrop_resolved": ArmedCrop((0.1, 0.1, 0.9, 0.9), autocrop_detection_key(straight), (1.2, 0.0, 0.0), True, True)}
+        )
+        self.mock_session_manager.update_config.assert_not_called()
+
     def test_freeze_drops_a_squaring_once_another_render_squared_the_arm(self):
         self._armed_auto_crop()
         done = replace(self.controller.state.config.geometry, autocrop_squared=True)

@@ -17,7 +17,9 @@ from negpy.domain.types import ROI, ImageBuffer
 from negpy.features.geometry.logic import (
     BORDER_SIDES,
     AutocropDetection,
+    MAX_STRIP_ROTATION,
     _closest_standard_ratio,
+    _detect_strip_frame,
     _detection_luma,
     _get_threshold_autocrop_coords,
     _trim_opaque_border,
@@ -61,6 +63,9 @@ _MIN_FALLBACK_COVERAGE = 0.9
 # Confidence for a frame the roll never saw, resolved from its own crop alone. It carries a
 # single frame's evidence, so it cannot claim what a pooled frame does.
 _OWN_CROP_CONFIDENCE = 0.5
+_STRIP_FRAME = "strip_frame"
+# Frames that resolve from their own crop and take no part in the roll.
+_OWN_CROP_REASONS = ("unsupported_orientation", _STRIP_FRAME)
 
 
 @dataclass(frozen=True)
@@ -134,6 +139,8 @@ class ResolvedCrop:
     correction_angle: float
     confidence: float
     calibrated: bool
+    # A film strip's marks set the angle, which then counts as this arm's one rotation.
+    straightened: bool = False
 
 
 def _vertical_edge_profile(img: ImageBuffer) -> tuple[np.ndarray, float]:
@@ -236,15 +243,37 @@ def detect_crop_candidate(
     *,
     target_ratio: str = "3:2",
     rebate_trim: float = 1.0,
+    strip_slide: bool | None = None,
+    own_skew: bool = False,
 ) -> CropEvidence:
     """Collect crop, deskew, and edge evidence for one transformed preview.
 
     The caller must apply flat-field correction, coarse rotation, flips, existing
     fine rotation, and distortion first.  A portrait canvas takes no part in the roll,
-    which is landscape, and carries its own single-frame crop instead.
+    which is landscape, and carries its own single-frame crop instead. So does a frame a
+    film strip's marks place (`strip_slide`, True on a slide), as frame size changes within a roll.
     """
     h, w = image.shape[:2]
     profile, profile_contrast = _vertical_edge_profile(image)
+    strip = None if strip_slide is None else _detect_strip_frame(image, strip_slide)
+    if strip is not None:
+        straighten = not own_skew and abs(strip.angle) <= MAX_STRIP_ROTATION
+        angle = strip.angle if straighten else 0.0
+        own_image = apply_fine_rotation(image, angle) if abs(angle) > 1e-4 else image
+        return CropEvidence(
+            key,
+            (h, w),
+            None,
+            angle,
+            0.0,
+            target_ratio=target_ratio,
+            rebate_trim=rebate_trim,
+            angle_confident=True,
+            vertical_edge_contrast=profile_contrast,
+            vertical_edge_profile=profile,
+            fallback_roi=get_autocrop_coords(own_image, target_ratio_str=target_ratio, rebate_trim=rebate_trim, strip_slide=strip_slide),
+            reason=_STRIP_FRAME,
+        )
     if w <= h:
         skew = _edge_fit(image)
         # The roll template cannot place this frame, but the single-frame detector reads it
@@ -707,6 +736,7 @@ def _own_crop(item: CropEvidence) -> list[ResolvedCrop]:
             correction_angle=item.correction_angle,
             confidence=_OWN_CROP_CONFIDENCE,
             calibrated=False,
+            straightened=item.reason == _STRIP_FRAME,
         )
     ]
 
@@ -718,20 +748,20 @@ def resolve_roll_crops(
 ) -> list[ResolvedCrop]:
     """Resolve trustworthy and template-supported frames; ambiguous frames abstain."""
     # A portrait frame's rect and fitted angle describe a different canvas.
-    pooled = [item for item in evidence if item.reason != "unsupported_orientation"]
+    pooled = [item for item in evidence if item.reason not in _OWN_CROP_REASONS]
     templates = {
         ratio: build_roll_template([item for item in pooled if item.target_ratio == ratio])
         for ratio in dict.fromkeys(item.target_ratio for item in evidence)
     }
 
-    # A portrait frame resolves before the roll is consulted, and whether or not the roll
+    # A portrait or strip frame resolves before the roll is consulted, and whether or not the roll
     # produced a template: it took no part in either, so neither can place it.
-    results = [crop for item in evidence if item.reason == "unsupported_orientation" for crop in _own_crop(item)]
+    results = [crop for item in evidence if item.reason in _OWN_CROP_REASONS for crop in _own_crop(item)]
     if not any(template is not None for template in templates.values()):
         return results
 
     for item in evidence:
-        if item.reason == "unsupported_orientation":
+        if item.reason in _OWN_CROP_REASONS:
             continue
         template = templates.get(item.target_ratio)
         if template is None:

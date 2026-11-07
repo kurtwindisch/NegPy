@@ -30,7 +30,7 @@ def _square(fine=1.5, cv=0.7, ch=0.0):
 def test_a_fresh_arm_is_squared_then_cropped_on_the_squared_frame():
     seen = []
 
-    def crop(_img, geometry, _size):
+    def crop(_img, geometry, _size, **_):
         seen.append(geometry)
         return (0.1, 0.1, 0.9, 0.9)
 

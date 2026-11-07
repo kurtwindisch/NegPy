@@ -94,7 +94,7 @@ class TestBatchAutoCropController:
         assert [frame.file_info["hash"] for frame in self.tasks[0].frames] == ["off", "on"]
         self.controller._on_batch_autocrop_cancelled()
 
-    def _finish_one(self, latest: WorkspaceConfig, started: bool, saved_now) -> None:
+    def _finish_one(self, latest: WorkspaceConfig, started: bool, saved_now, *, angle=0.0, straightened=False) -> None:
         asset = {"name": "b.dng", "path": "/roll/b.dng", "hash": "b"}
         self.controller.state.current_file_hash = "a"
         self.session.config_for_asset.return_value = latest
@@ -105,7 +105,16 @@ class TestBatchAutoCropController:
         self.controller._autocrop_preflight_skipped = 0
         self.controller._autocrop_started_auto = {"b": started}
         fingerprint = _autocrop_fingerprint(latest, self.controller.state.workspace_color_space)
-        self.controller._on_batch_autocrop_finished([BatchAutoCropResult(asset, fingerprint, (0.1, 0.1, 0.9, 0.9), 0.0, 0.9, False)])
+        result = BatchAutoCropResult(asset, fingerprint, (0.1, 0.1, 0.9, 0.9), angle, 0.9, False, straightened=straightened)
+        self.controller._on_batch_autocrop_finished([result])
+
+    def test_finish_marks_the_arm_of_a_strip_rotation(self) -> None:
+        """A later reset of the rotation then stays reset."""
+        armed = replace(WorkspaceConfig(), geometry=replace(WorkspaceConfig().geometry, crop_from_auto=True))
+        self._finish_one(armed, started=True, saved_now=armed, angle=1.5, straightened=True)
+
+        geometry = self.session.repo.save_file_settings.call_args.args[1].geometry
+        assert geometry.fine_rotation == 1.5 and geometry.autocrop_squared
 
     def test_finish_skips_a_frame_whose_auto_crop_changed_mid_run(self) -> None:
         self._finish_one(WorkspaceConfig(), started=True, saved_now=WorkspaceConfig())

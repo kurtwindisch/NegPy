@@ -1,7 +1,7 @@
 import math
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import negpy_core
 import numpy as np
@@ -18,6 +18,8 @@ from negpy.kernel.image.logic import get_luminance
 from negpy.kernel.image.validation import ensure_image
 
 AUTOCROP_DETECT_RES = 1800
+# The largest tilt Auto Crop straightens by itself; past it, the crop sits inside the frame.
+MAX_STRIP_ROTATION = 8.0
 
 
 @dataclass(frozen=True)
@@ -258,6 +260,21 @@ def rebate_mask(shape: Tuple[int, int], film_roi: Optional[ROI], gate: ROI) -> n
         rebate[fy1:fy2, fx1:fx2] = True
         rebate[gy1:gy2, gx1:gx2] = False
     return rebate
+
+
+class StripFrame(NamedTuple):
+    """The picture in a scan that shows a film strip's own marks, in the input's coordinates."""
+
+    roi: ROI  # the largest straight rectangle inside the frame
+    film: ROI  # the film box Rebate Trim scales between
+    angle: float  # the Fine Rotation that straightens the strip
+
+
+def _detect_strip_frame(img: ImageBuffer, slide: bool) -> Optional[StripFrame]:
+    """The frame a strip's marks locate; None when the scan shows none or no frame fits. A rectangle
+    for the image as given, so a tilted strip that stays tilted gets a crop inside the frame."""
+    found = negpy_core.find_strip_frame(np.ascontiguousarray(img, dtype=np.float32), slide)
+    return None if found is None else StripFrame(*found)
 
 
 def _refine_roi_to_image(img: ImageBuffer, film_roi: ROI) -> Tuple[ROI, Optional[np.ndarray], Optional[np.ndarray]]:
@@ -783,35 +800,41 @@ def get_autocrop_coords(
     assist_luma: Optional[float] = None,
     mode: str = AutocropMode.IMAGE,
     rebate_trim: float = 1.0,
+    strip_slide: Optional[bool] = None,
 ) -> ROI:
     """
     Detects film border via density thresholding.
 
     mode="film" crops to the film extent (rebate/sprockets kept);
     mode="image" refines inward to the exposed image area, by rebate_trim of the way
-    (1.0 = the detected image edge).
+    (1.0 = the detected image edge). With `strip_slide` set (True on a slide), mode="image"
+    looks for a film strip's marks first; None skips that search.
     """
     h, w = img.shape[:2]
     det, det_scale = _normalize_detection_input(img, detect_res)
-    film_roi = _detect_film_bounds(det)
-    from_contours = film_roi is not None
-    if film_roi is None:
-        film_roi = _get_threshold_autocrop_coords(det, assist_luma)
-
-    # Trim the opaque holder stripes the film detection left in. They sit at the absolute
-    # frame edge and become a white band after inversion.
-    lum = _detection_luma(det)
-    film_roi = _trim_opaque_border(lum, film_roi)
-
+    strip = _detect_strip_frame(det, strip_slide) if strip_slide is not None and mode == AutocropMode.IMAGE else None
     row_occ = col_occ = None
-    if mode == AutocropMode.FILM:
-        roi = film_roi
-    elif from_contours:
-        roi, row_occ, col_occ = _refine_roi_to_image(det, film_roi)
+    if strip is not None:
+        film_roi, roi = strip.film, strip.roi
     else:
-        # The threshold fallback's box is too loose to refine inward, but the mask/base walk
-        # reads the edges themselves and needs no well-found box.
-        roi = _trim_film_edges(lum, film_roi)
+        film_roi = _detect_film_bounds(det)
+        from_contours = film_roi is not None
+        if film_roi is None:
+            film_roi = _get_threshold_autocrop_coords(det, assist_luma)
+
+        # Trim the opaque holder stripes the film detection left in. They sit at the absolute
+        # frame edge and become a white band after inversion.
+        lum = _detection_luma(det)
+        film_roi = _trim_opaque_border(lum, film_roi)
+
+        if mode == AutocropMode.FILM:
+            roi = film_roi
+        elif from_contours:
+            roi, row_occ, col_occ = _refine_roi_to_image(det, film_roi)
+        else:
+            # The threshold fallback's box is too loose to refine inward, but the mask/base walk
+            # reads the edges themselves and needs no well-found box.
+            roi = _trim_film_edges(lum, film_roi)
 
     roi = scale_roi_inset(film_roi, roi, rebate_trim)
     roi = _scale_roi(roi, det_scale, h, w)
@@ -866,22 +889,17 @@ def meter_detection_key(geometry: GeometryConfig, shape: Tuple[int, ...]) -> str
     return f"{autocrop_detection_key(geometry)}|{w / h:.2f}"
 
 
-def resolve_meter_rect(img: ImageBuffer, geometry: GeometryConfig, preview_size: float) -> Optional[Tuple[float, float, float, float]]:
+def resolve_meter_rect(
+    img: ImageBuffer, geometry: GeometryConfig, preview_size: float, strip_slide: Optional[bool] = None
+) -> Optional[Tuple[float, float, float, float]]:
     """The picture box the meters read on a frame with no crop: the rect Auto Crop would keep, when the film
     sits in an opaque holder or on bare light. None when the film fills the frame, which is metered whole."""
-    return resolve_autocrop_rect(img, geometry, preview_size, require_film_box=True)
+    return resolve_autocrop_rect(img, geometry, preview_size, require_film_box=True, strip_slide=strip_slide)
 
 
-def resolve_autocrop_rect(
-    img: ImageBuffer,
-    geometry: GeometryConfig,
-    preview_size: float,
-    require_film_box: bool = False,
-) -> Optional[Tuple[float, float, float, float]]:
-    """The auto crop as a normalized rect in transformed-image space; the caller freezes it, so later renders crop
-    the same at any resolution. Runs at AUTOCROP_DETECT_RES in GeometryProcessor order (rot90 -> flips -> fine
-    rotation -> distortion -> keystone). Excludes Crop Offset, which get_manual_rect_coords adds per render; None when
-    too small, or with `require_film_box` when no film box stands out from a holder or bed."""
+def _detection_view(img: ImageBuffer, geometry: GeometryConfig) -> ImageBuffer:
+    """The frame at AUTOCROP_DETECT_RES in GeometryProcessor order (rot90 -> flips -> fine rotation ->
+    distortion -> keystone), so detection sees what the render produces."""
     tmp, _ = _normalize_detection_input(img, AUTOCROP_DETECT_RES)
     if geometry.rotation != 0:
         tmp = np.rot90(tmp, k=geometry.rotation)
@@ -896,13 +914,37 @@ def resolve_autocrop_rect(
         tmp = apply_radial_distortion(tmp, geometry.distortion_k1)
     # Detection must see the frame the render produces, or the rect is found on a
     # straight rebate and applied to a keystoned one.
-    tmp = apply_keystone(tmp, geometry.converge_v, geometry.converge_h)
+    return apply_keystone(tmp, geometry.converge_v, geometry.converge_h)
 
+
+def strip_tilt(img: ImageBuffer, geometry: GeometryConfig, slide: bool) -> Optional[float]:
+    """The Fine Rotation a film strip's marks ask for on top of *geometry*; None when the scan
+    shows no strip frame."""
+    tmp = _detection_view(img, geometry)
+    if tmp.shape[0] < 2 or tmp.shape[1] < 2:
+        return None
+    strip = _detect_strip_frame(_normalize_detection_input(tmp, AUTOCROP_DETECT_RES)[0], slide)
+    return None if strip is None else strip.angle
+
+
+def resolve_autocrop_rect(
+    img: ImageBuffer,
+    geometry: GeometryConfig,
+    preview_size: float,
+    require_film_box: bool = False,
+    strip_slide: Optional[bool] = None,
+) -> Optional[Tuple[float, float, float, float]]:
+    """The auto crop as a normalized rect in transformed-image space; the caller freezes it, so later renders crop
+    the same at any resolution. Excludes Crop Offset, which get_manual_rect_coords adds per render; None when too
+    small, or with `require_film_box` when neither a film box nor a strip frame stands out from a holder or bed."""
+    tmp = _detection_view(img, geometry)
     rh, rw = tmp.shape[:2]
     if rh < 2 or rw < 2:
         return None
-    if require_film_box and _detect_film_bounds(_normalize_detection_input(tmp, AUTOCROP_DETECT_RES)[0]) is None:
-        return None
+    if require_film_box:
+        det = _normalize_detection_input(tmp, AUTOCROP_DETECT_RES)[0]
+        if _detect_film_bounds(det) is None and (strip_slide is None or _detect_strip_frame(det, strip_slide) is None):
+            return None
     y1, y2, x1, x2 = get_autocrop_coords(
         tmp,
         offset_px=0,
@@ -912,6 +954,7 @@ def resolve_autocrop_rect(
         target_ratio_str=geometry.autocrop_ratio,
         mode=geometry.autocrop_mode,
         rebate_trim=geometry.autocrop_rebate_trim,
+        strip_slide=strip_slide,
     )
     if y2 - y1 < 2 or x2 - x1 < 2:
         return None
