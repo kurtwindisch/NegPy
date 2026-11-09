@@ -43,7 +43,6 @@ from negpy.features.flatfield.logic import apply_flatfield, flatfield_token
 from negpy.features.lab.logic import apply_resize_sharpening
 from negpy.services.rendering.lens import flatfield_source, lens_decode_token, metadata_lens_corrections, prepare_lens_source
 from negpy.features.geometry.logic import (
-    MAX_STRIP_ROTATION,
     autocrop_detection_key,
     meter_detection_key,
     resolve_autocrop_rect,
@@ -248,7 +247,7 @@ def _resolve_armed_autocrop(img: np.ndarray, settings: WorkspaceConfig) -> Tuple
     tilt = None if slide is None else strip_tilt(img, geom, slide)
     if tilt is None:
         slide = None  # Searched: the rect does not search again.
-    if tilt is not None and straightens_on_arm(geom) and abs(tilt) <= MAX_STRIP_ROTATION:
+    if tilt is not None and straightens_on_arm(geom):
         geom = dc_replace(geom, fine_rotation=tilt)
         skew = (geom.fine_rotation, geom.converge_v, geom.converge_h)
         key = autocrop_detection_key(geom)

@@ -276,11 +276,21 @@ def test_a_frame_with_its_own_rotation_keeps_it():
     assert resolved is not None and resolved.skew is None
 
 
-def test_a_tilt_past_the_limit_is_not_straightened():
-    with patch("negpy.services.rendering.image_processor.strip_tilt", return_value=9.0):
+def _tilted_to(angle: float):
+    """The core's own find on a level strip, reported at `angle`."""
+    roi, film, _ = negpy_core.find_strip_frame(np.ascontiguousarray(_strip(), dtype=np.float32), False)
+    return patch("negpy.features.geometry.logic.negpy_core.find_strip_frame", return_value=(roi, film, angle))
+
+
+@pytest.mark.parametrize("angle, kept", [(8.0, True), (-8.0, True), (8.5, False), (-8.5, False)])
+def test_a_strip_tilted_past_the_limit_steps_aside(angle, kept):
+    with _tilted_to(angle):
+        assert (_detect_strip_frame(_strip(), False) is not None) is kept
         settings, resolved = _resolve_armed_autocrop(_strip(), _armed())
-    assert settings.geometry.fine_rotation == 0.0
-    assert resolved is not None and resolved.skew is None
+        evidence = detect_crop_candidate("a", _strip(), target_ratio="3:2", strip_slide=False)
+    assert settings.geometry.fine_rotation == (angle if kept else 0.0)
+    assert resolved is not None and resolved.from_strip is kept
+    assert (evidence.reason == "strip_frame") is kept
 
 
 def test_square_first_does_not_run_on_a_strip():

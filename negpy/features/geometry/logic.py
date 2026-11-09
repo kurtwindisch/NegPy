@@ -18,7 +18,7 @@ from negpy.kernel.image.logic import get_luminance
 from negpy.kernel.image.validation import ensure_image
 
 AUTOCROP_DETECT_RES = 1800
-# The largest tilt Auto Crop straightens by itself; past it, the crop sits inside the frame.
+# The largest strip tilt Auto Crop straightens by itself. A strip tilted past it takes the film box path.
 MAX_STRIP_ROTATION = 8.0
 
 
@@ -271,10 +271,13 @@ class StripFrame(NamedTuple):
 
 
 def _detect_strip_frame(img: ImageBuffer, slide: bool) -> Optional[StripFrame]:
-    """The frame a strip's marks locate; None when the scan shows none or no frame fits. A rectangle
-    for the image as given, so a tilted strip that stays tilted gets a crop inside the frame."""
+    """The frame a strip's marks locate; None when the scan shows none, no frame fits, or the strip
+    is tilted past `MAX_STRIP_ROTATION`. A rectangle for the image as given, so a tilted strip that
+    stays tilted gets a crop inside the frame."""
     found = negpy_core.find_strip_frame(np.ascontiguousarray(img, dtype=np.float32), slide)
-    return None if found is None else StripFrame(*found)
+    if found is None or abs(found[2]) > MAX_STRIP_ROTATION:
+        return None
+    return StripFrame(*found)
 
 
 def _refine_roi_to_image(img: ImageBuffer, film_roi: ROI) -> Tuple[ROI, Optional[np.ndarray], Optional[np.ndarray]]:

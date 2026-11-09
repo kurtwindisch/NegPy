@@ -17,7 +17,6 @@ from negpy.domain.types import ROI, ImageBuffer
 from negpy.features.geometry.logic import (
     BORDER_SIDES,
     AutocropDetection,
-    MAX_STRIP_ROTATION,
     _closest_standard_ratio,
     _detect_strip_frame,
     _detection_luma,
@@ -257,8 +256,7 @@ def detect_crop_candidate(
     profile, profile_contrast = _vertical_edge_profile(image)
     strip = None if strip_slide is None else _detect_strip_frame(image, strip_slide)
     if strip is not None:
-        straighten = not own_skew and abs(strip.angle) <= MAX_STRIP_ROTATION
-        angle = strip.angle if straighten else 0.0
+        angle = 0.0 if own_skew else strip.angle
         own_image = apply_fine_rotation(image, angle) if abs(angle) > 1e-4 else image
         return CropEvidence(
             key,
