@@ -179,6 +179,24 @@ def test_two_half_frames_step_aside(gutter):
     assert _detect_strip_frame(_strip(gutter=gutter), False) is None
 
 
+def _cut(img: np.ndarray, shows: float) -> tuple[np.ndarray, int]:
+    """The scan's top and bottom edges cut each hole row, so `shows` of each hole stays in view."""
+    top = int(H / 2 - 14 * MM + 1.4 * MM - shows * 2.8 * MM)
+    return np.ascontiguousarray(img[top : H - top]), top
+
+
+@pytest.mark.parametrize("slide", [False, True], ids=["negative", "slide"])
+@pytest.mark.parametrize("shows", [0.4, 0.6, 0.9])
+def test_holes_the_scan_edge_cuts_still_place_the_frame(slide, shows):
+    img, top = _cut(_strip(slide=slide), shows)
+    found = _detect_strip_frame(img, slide)
+    assert found is not None and _near(found.roi, (TOP - top, BOTTOM - top, LEFT, RIGHT))
+
+
+def test_slivers_of_holes_step_aside():
+    assert _detect_strip_frame(_cut(_strip(), 0.15)[0], False) is None
+
+
 def test_a_row_of_uneven_bright_shapes_is_not_a_sprocket_row():
     """The median gap reads as the true pitch, so only the spacing test stops this frame."""
     gaps = (PITCH, 90, 210, PITCH, 100, 200, PITCH, 95, 205, PITCH)

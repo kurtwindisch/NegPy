@@ -70,6 +70,11 @@ const HOLE_LEVEL: f64 = 0.72;
 const HOLE_AREA: (f64, f64) = (0.0006, 0.012);
 const HOLE_ASPECT: (f64, f64) = (0.45, 1.15);
 const HOLE_FILL: f64 = 0.8;
+/// A hole's height across the film over its width along it: 2.79 by 1.98 mm on still film, and
+/// near that on cine film. A hole the scan's edge cuts is placed from its width.
+const HOLE_ACROSS_PER_ALONG: f64 = 1.41;
+/// The least share of its height a cut hole shows, so that its inner edge is a real edge.
+const CUT_HOLE_SHOWS: f64 = 0.3;
 /// How far the early screen loosens each hole limit.
 const SCREEN_SLACK: f64 = 0.8;
 const SCREEN_STEP: usize = 3;
@@ -108,10 +113,12 @@ const ROW_EDGE_SHARE: f64 = 0.3;
 struct Hole {
     x: f64,
     y: f64,
+    /// The scan's top or bottom edge cuts the hole, so `y` is placed from its width.
+    cut: bool,
 }
 
-/// Sprocket holes: compact bright shapes clear of the scan's edge. The shape limits stay wide,
-/// because cine and still perforations differ.
+/// Sprocket holes: compact bright shapes clear of the scan's edge, or cut by its top or bottom edge.
+/// The shape limits stay wide, because cine and still perforations differ.
 fn holes(lum: &[f32], h: usize, w: usize) -> Vec<Hole> {
     let Some(q) = np_percentiles(lum, &[99.5]) else {
         return Vec::new();
@@ -124,14 +131,33 @@ fn holes(lum: &[f32], h: usize, w: usize) -> Vec<Hole> {
         .filter_map(|i| {
             let [x, y, bw, bh, area] = c.stats[i];
             let (bw_f, bh_f, area_f) = (bw as f64, bh as f64, area as f64);
-            let clear = x > 0 && y > 0 && x + bw < w as i32 && y + bh < h as i32;
-            let sized = HOLE_AREA.0 * frame < area_f && area_f < HOLE_AREA.1 * frame;
-            let shaped = HOLE_ASPECT.0 < bw_f / bh_f
-                && bw_f / bh_f < HOLE_ASPECT.1
-                && area_f / (bw_f * bh_f) > HOLE_FILL;
-            (clear && sized && shaped).then(|| Hole {
+            let filled = area_f / (bw_f * bh_f) > HOLE_FILL;
+            let (top, bottom) = (y == 0, y + bh >= h as i32);
+            if x == 0 || x + bw >= w as i32 || (top && bottom) {
+                return None;
+            }
+            if !top && !bottom {
+                let sized = HOLE_AREA.0 * frame < area_f && area_f < HOLE_AREA.1 * frame;
+                let shaped = HOLE_ASPECT.0 < bw_f / bh_f && bw_f / bh_f < HOLE_ASPECT.1 && filled;
+                return (sized && shaped).then(|| Hole {
+                    x: c.centroids[i][0],
+                    y: c.centroids[i][1],
+                    cut: false,
+                });
+            }
+            // The width along the film and the inner edge stay whole on a cut hole.
+            let full = bw_f * HOLE_ACROSS_PER_ALONG;
+            let sized = HOLE_AREA.0 * frame < bw_f * full && bw_f * full < HOLE_AREA.1 * frame;
+            let cut = bh_f >= CUT_HOLE_SHOWS * full && bw_f / bh_f > HOLE_ASPECT.0 && filled;
+            let y = if top {
+                (y + bh) as f64 - full / 2.0
+            } else {
+                y as f64 + full / 2.0
+            };
+            (sized && cut).then(|| Hole {
                 x: c.centroids[i][0],
-                y: c.centroids[i][1],
+                y,
+                cut: true,
             })
         })
         .collect()
@@ -169,15 +195,14 @@ fn evenly_spaced(row: &[Hole]) -> bool {
     even.count() as f64 / dx.len() as f64 >= EVEN_SPACING.1
 }
 
-fn hole_rows(lum: &[f32], h: usize, w: usize) -> Option<(Vec<Hole>, Option<Vec<Hole>>)> {
-    let found = holes(lum, h, w);
+/// Up to two sprocket rows among `found`, the larger first.
+fn rows_in(found: &[Hole], band: f64) -> Vec<Vec<Hole>> {
     if found.len() < FIRST_ROW_HOLES {
-        return None;
+        return Vec::new();
     }
-    let band = ROW_BAND * h as f64;
-    let first = largest_row(&found, band);
+    let first = largest_row(found, band);
     if !evenly_spaced(&first) {
-        return None;
+        return Vec::new();
     }
     let rest: Vec<Hole> = found
         .iter()
@@ -187,7 +212,21 @@ fn hole_rows(lum: &[f32], h: usize, w: usize) -> Option<(Vec<Hole>, Option<Vec<H
     let second = (rest.len() >= SECOND_ROW_HOLES)
         .then(|| largest_row(&rest, band))
         .filter(|r| r.len() >= SECOND_ROW_HOLES && evenly_spaced(r));
-    Some((first, second))
+    std::iter::once(first).chain(second).collect()
+}
+
+/// Rows of whole holes, else rows of the holes the scan's edge cuts: a cut hole's place comes
+/// from an assumed hole shape, so it never moves a row that whole holes give.
+fn hole_rows(lum: &[f32], h: usize, w: usize) -> Option<(Vec<Hole>, Option<Vec<Hole>>)> {
+    let (cut, whole): (Vec<Hole>, Vec<Hole>) = holes(lum, h, w).into_iter().partition(|o| o.cut);
+    let band = ROW_BAND * h as f64;
+    let mut rows = rows_in(&whole, band);
+    if rows.is_empty() {
+        rows = rows_in(&cut, band);
+    }
+    let mut rows = rows.into_iter();
+    let first = rows.next()?;
+    Some((first, rows.next()))
 }
 
 fn row_slope(row: &[Hole]) -> f64 {
@@ -626,13 +665,27 @@ fn may_show_holes(img: &[f32], h: usize, w: usize, cn: usize) -> bool {
     let c = connected_components(&mask, sh, sw, 8);
     let frame = (sh * sw) as f64;
     let shapes = (1..c.count).filter(|&i| {
-        let [_, _, bw, bh, area] = c.stats[i];
-        let (bw, bh, area) = (bw as f64, bh as f64, area as f64);
-        let aspect = bw.min(bh) / bw.max(bh);
-        HOLE_AREA.0 * SCREEN_SLACK * frame < area
-            && area < HOLE_AREA.1 / SCREEN_SLACK * frame
+        let [x, y, bw, bh, area] = c.stats[i];
+        let (bw_f, bh_f, area_f) = (bw as f64, bh as f64, area as f64);
+        let filled = area_f / (bw_f * bh_f) > HOLE_FILL * SCREEN_SLACK;
+        let aspect = bw_f.min(bh_f) / bw_f.max(bh_f);
+        let whole = HOLE_AREA.0 * SCREEN_SLACK * frame < area_f
+            && area_f < HOLE_AREA.1 / SCREEN_SLACK * frame
             && aspect > HOLE_ASPECT.0 * SCREEN_SLACK
-            && area / (bw * bh) > HOLE_FILL * SCREEN_SLACK
+            && filled;
+        let (on_x, on_y) = (x == 0 || x + bw >= sw as i32, y == 0 || y + bh >= sh as i32);
+        let (along, shown) = match (on_x, on_y) {
+            (true, false) => (bh_f, bw_f),
+            (false, true) => (bw_f, bh_f),
+            _ => return whole,
+        };
+        let full = along * HOLE_ACROSS_PER_ALONG;
+        let cut = HOLE_AREA.0 * SCREEN_SLACK * frame < along * full
+            && along * full < HOLE_AREA.1 / SCREEN_SLACK * frame
+            && shown >= CUT_HOLE_SHOWS * SCREEN_SLACK * full
+            && along / shown > HOLE_ASPECT.0 * SCREEN_SLACK
+            && filled;
+        whole || cut
     });
     shapes.take(FIRST_ROW_HOLES).count() == FIRST_ROW_HOLES
 }
@@ -760,6 +813,42 @@ mod tests {
         assert!(((f.roi.3 - f.roi.2) - (flat.roi.1 - flat.roi.0)).abs() <= 2);
     }
 
+    /// The strip's rows `top..bottom`: a scan that cuts the holes.
+    fn rows(lum: &[f32], top: usize, bottom: usize) -> Vec<f32> {
+        lum[top * W..bottom * W].to_vec()
+    }
+
+    #[test]
+    fn holes_the_scan_edge_cuts_still_place_the_frame() {
+        let lum = strip(false);
+        let flat = find_strip_frame(&lum, H, W, 1, false).expect("a frame");
+        let row = (14.0 * MM) as usize;
+        let (top, bottom) = (500 - row, 500 + row);
+        let f =
+            find_strip_frame(&rows(&lum, top, bottom), bottom - top, W, 1, false).expect("a frame");
+        let shifted = (
+            flat.roi.0 - top as i64,
+            flat.roi.1 - top as i64,
+            flat.roi.2,
+            flat.roi.3,
+        );
+        for (a, b) in [f.roi.0, f.roi.1, f.roi.2, f.roi.3]
+            .iter()
+            .zip([shifted.0, shifted.1, shifted.2, shifted.3])
+        {
+            assert!((a - b).abs() <= 4, "{:?} against {:?}", f.roi, shifted);
+        }
+    }
+
+    #[test]
+    fn slivers_of_holes_step_aside() {
+        let lum = strip(false);
+        let row = (14.0 * MM) as usize - 45 + 15;
+        assert!(
+            find_strip_frame(&rows(&lum, 500 - row, 500 + row), 2 * row, W, 1, false).is_none()
+        );
+    }
+
     #[test]
     fn two_half_frames_step_aside() {
         assert!(find_strip_frame(&strip(true), H, W, 1, false).is_none());
@@ -767,7 +856,11 @@ mod tests {
 
     #[test]
     fn unevenly_spaced_shapes_are_not_sprockets() {
-        let hole = |x| Hole { x, y: 0.0 };
+        let hole = |x| Hole {
+            x,
+            y: 0.0,
+            cut: false,
+        };
         let row = |xs: &[f64]| xs.iter().map(|&x| hole(x)).collect::<Vec<_>>();
         assert!(evenly_spaced(&row(&[0.0, 150.0, 300.0, 450.0, 600.0])));
         assert!(!evenly_spaced(&row(&[
